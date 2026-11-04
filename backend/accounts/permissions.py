@@ -57,6 +57,7 @@ class IsOwnerOrSupportTeam(HasApplicationRole):
     """
 
     allowed_roles = frozenset({
+        UserProfile.Role.CUSTOMER,
         UserProfile.Role.AGENT,
         UserProfile.Role.MANAGER,
         UserProfile.Role.ADMIN,
@@ -66,6 +67,17 @@ class IsOwnerOrSupportTeam(HasApplicationRole):
         user = request.user
         if not user or not user.is_authenticated:
             return False
-        if getattr(obj, "customer_id", None) == user.pk:
-            return True
-        return self.has_permission(request, view)
+
+        try:
+            role = user.profile.role
+        except UserProfile.DoesNotExist:
+            return False
+
+        if role == UserProfile.Role.CUSTOMER:
+            return getattr(obj, "customer_id", None) == user.pk
+
+        return role in {
+            UserProfile.Role.AGENT,
+            UserProfile.Role.MANAGER,
+            UserProfile.Role.ADMIN,
+        }

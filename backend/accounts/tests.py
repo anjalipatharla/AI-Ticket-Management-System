@@ -105,6 +105,30 @@ class RolePermissionTests(TestCase):
             IsOwnerOrSupportTeam().has_object_permission(request, None, ticket)
         )
 
+    def test_customer_cannot_access_another_customers_object(self):
+        class TicketStub:
+            customer_id = None
+
+        ticket = TicketStub()
+        ticket.customer_id = self.agent.pk
+        request = self.factory.get("/")
+        request.user = self.customer
+        self.assertFalse(
+            IsOwnerOrSupportTeam().has_object_permission(request, None, ticket)
+        )
+
+    def test_support_agent_can_access_customer_object(self):
+        class TicketStub:
+            customer_id = None
+
+        ticket = TicketStub()
+        ticket.customer_id = self.customer.pk
+        request = self.factory.get("/")
+        request.user = self.agent
+        self.assertTrue(
+            IsOwnerOrSupportTeam().has_object_permission(request, None, ticket)
+        )
+
 
 class RegistrationTests(TestCase):
     def test_registration_creates_customer_profile_and_returns_jwt(self):
