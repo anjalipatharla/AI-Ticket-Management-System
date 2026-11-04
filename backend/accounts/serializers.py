@@ -14,6 +14,10 @@ from google.oauth2 import id_token
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
 from .models import GoogleIdentity, UserProfile
 
@@ -205,6 +209,11 @@ class ResetPasswordSerializer(serializers.Serializer):
     def save(self):
         self.user.set_password(self.validated_data["new_password"])
         self.user.save(update_fields=["password"])
+
+        # Revoke all outstanding refresh tokens after a password change.
+        for outstanding_token in OutstandingToken.objects.filter(user=self.user):
+            BlacklistedToken.objects.get_or_create(token=outstanding_token)
+
         return self.user
 
 

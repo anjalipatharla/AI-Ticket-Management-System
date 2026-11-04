@@ -118,6 +118,17 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "register": "5/hour",
+        "login": "10/minute",
+        "token_refresh": "30/minute",
+        "google_login": "10/minute",
+        "google_link": "10/hour",
+        "password_reset": "5/hour",
+    },
 }
 
 SIMPLE_JWT = {

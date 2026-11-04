@@ -352,3 +352,28 @@ class AuthenticationAndAuthorizationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user.refresh_from_db()
         self.assertTrue(user.check_password(new_password))
+
+
+    def test_password_reset_blacklists_outstanding_refresh_tokens(self):
+        user = self.make_user("revoketokens", "revoke@example.com")
+        refresh = RefreshToken.for_user(user)
+        token_jti = refresh["jti"]
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        new_password = "An0ther$trong_Password_2026!!"
+
+        response = self.client.post(
+            "/api/accounts/reset-password/",
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": new_password,
+                "confirm_password": new_password,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            BlacklistedToken.objects.filter(token__jti=token_jti).exists()
+        )

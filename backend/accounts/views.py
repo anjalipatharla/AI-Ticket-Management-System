@@ -2,8 +2,10 @@ from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .models import UserProfile
 from .permissions import IsApplicationAdmin
@@ -22,6 +24,8 @@ from .serializers import (
 class RegisterView(generics.GenericAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register"
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -75,6 +79,8 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
@@ -94,6 +100,8 @@ class ForgotPasswordView(APIView):
 
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
@@ -109,6 +117,8 @@ class ResetPasswordView(APIView):
 class GoogleLoginView(generics.GenericAPIView):
     serializer_class = GoogleLoginSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "google_login"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -119,6 +129,8 @@ class GoogleLoginView(generics.GenericAPIView):
 class GoogleLinkView(generics.GenericAPIView):
     serializer_class = GoogleLinkSerializer
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "google_link"
 
     def post(self, request):
         serializer = self.get_serializer(
@@ -183,3 +195,15 @@ class UserRoleUpdateView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class LoginView(TokenObtainPairView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
+
+
+class RefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "token_refresh"

@@ -13,6 +13,8 @@ Django REST Framework backend for an AI-powered ticket and customer support plat
 - Authenticated Google account linking
 - Application roles: Customer, Support Agent, Manager, Application Admin
 - Role-protected application role management
+- Scoped rate limits on public authentication endpoints
+- Refresh-token revocation after password reset
 - Django superuser kept separate from the Application Admin role
 
 Ticket-management APIs, AI services, and the remaining enterprise modules are planned work; the current ticket app is a placeholder.
@@ -117,7 +119,7 @@ Run from backend/:
 python manage.py test accounts
 ~~~
 
-The tests cover registration, JWT login/refresh/logout, profile role protection, Google login/linking, role management, and password reset.
+The tests cover registration, JWT login/refresh/logout, profile role protection, Google login/linking, role management, password reset, and refresh-token revocation.
 
 ## Security notes
 
