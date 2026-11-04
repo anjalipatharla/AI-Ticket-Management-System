@@ -302,3 +302,38 @@ class GoogleLinkTests(TestCase):
                 user=user, google_sub="legacy-sub"
             ).exists()
         )
+
+class PasswordResetTests(TestCase):
+    def test_password_reset_blacklists_outstanding_refresh_tokens(self):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+        from rest_framework_simplejwt.tokens import RefreshToken
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+
+        user = User.objects.create_user(
+            username="reset-user",
+            email="reset@example.com",
+            password="OldSafeExample123!",
+        )
+        refresh = RefreshToken.for_user(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+
+        response = self.client.post(
+            "/api/accounts/reset-password/",
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "NewSafeExample456!",
+                "confirm_password": "NewSafeExample456!",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            BlacklistedToken.objects.filter(token__jti=refresh["jti"]).exists()
+        )
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("NewSafeExample456!"))

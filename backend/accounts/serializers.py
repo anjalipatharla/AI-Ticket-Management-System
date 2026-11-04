@@ -8,6 +8,10 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
 from .models import GoogleIdentity, UserProfile
 
@@ -187,9 +191,16 @@ class ResetPasswordSerializer(serializers.Serializer):
         self.user = user
         return data
 
+    @transaction.atomic
     def save(self):
         self.user.set_password(self.validated_data["new_password"])
         self.user.save(update_fields=["password"])
+
+        # Revoke every outstanding refresh token after a password reset.
+        outstanding_tokens = OutstandingToken.objects.filter(user=self.user)
+        for outstanding in outstanding_tokens:
+            BlacklistedToken.objects.get_or_create(token=outstanding)
+
         return self.user
 
 
