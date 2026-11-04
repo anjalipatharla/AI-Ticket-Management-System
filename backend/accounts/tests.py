@@ -377,3 +377,32 @@ class AuthenticationAndAuthorizationTests(APITestCase):
         self.assertTrue(
             BlacklistedToken.objects.filter(token__jti=token_jti).exists()
         )
+
+
+    def test_email_login_returns_jwt(self):
+        user = self.make_user("emailuser", "email-login@example.com")
+
+        response = self.client.post(
+            "/api/accounts/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+    def test_login_rejects_request_with_both_username_and_email(self):
+        user = self.make_user("bothidentifiers", "both@example.com")
+
+        response = self.client.post(
+            "/api/accounts/login/",
+            {
+                "username": user.username,
+                "email": user.email,
+                "password": self.password,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

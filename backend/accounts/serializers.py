@@ -13,6 +13,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import (
     BlacklistedToken,
@@ -70,6 +71,37 @@ class RegisterSerializer(serializers.Serializer):
         )
         # accounts.signals creates a CUSTOMER UserProfile automatically.
         return user
+
+
+class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
+    # Keep the standard SimpleJWT username field optional so clients can
+    # authenticate with either username or email.
+    username = serializers.CharField(required=False, write_only=True)
+    email = serializers.EmailField(required=False, write_only=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # SimpleJWT's parent constructor re-adds username as required.
+        self.fields["username"].required = False
+
+    def validate(self, attrs):
+        username = attrs.get("username")
+        email = attrs.pop("email", None)
+
+        if bool(username) == bool(email):
+            raise serializers.ValidationError(
+                "Provide either username or email together with password."
+            )
+
+        if email:
+            matching_username = User.objects.filter(
+                email__iexact=email.strip()
+            ).values_list("username", flat=True).first()
+            # An empty username ensures unknown email addresses fail
+            # authentication without accidentally matching a username.
+            attrs["username"] = matching_username or ""
+
+        return super().validate(attrs)
 
 
 class LogoutSerializer(serializers.Serializer):

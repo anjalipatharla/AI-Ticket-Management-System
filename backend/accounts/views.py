@@ -10,6 +10,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .models import UserProfile
 from .permissions import IsApplicationAdmin
 from .serializers import (
+    EmailOrUsernameTokenObtainPairSerializer,
     ForgotPasswordSerializer,
     GoogleLinkSerializer,
     GoogleLoginSerializer,
@@ -198,6 +199,7 @@ class UserRoleUpdateView(APIView):
 
 
 class LoginView(TokenObtainPairView):
+    serializer_class = EmailOrUsernameTokenObtainPairSerializer
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"

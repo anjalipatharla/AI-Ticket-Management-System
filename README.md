@@ -5,7 +5,7 @@ Django REST Framework backend for an AI-powered ticket and customer support plat
 ## Current backend scope
 
 - Email/password customer registration with JWT issuance
-- Username/password JWT login and refresh
+- Username-or-email/password JWT login and token refresh
 - Refresh-token logout with blacklist
 - Authenticated profile retrieval and update
 - Password reset by email
@@ -68,7 +68,7 @@ The local API base URL is http://127.0.0.1:8000/api/accounts/.
 | Method | Endpoint | Access |
 |---|---|---|
 | POST | /api/accounts/register/ | Public |
-| POST | /api/accounts/login/ | Public |
+| POST | /api/accounts/login/ | Public; accepts username or email |
 | POST | /api/accounts/token/refresh/ | Public |
 | POST | /api/accounts/google/ | Public; requires Google ID token |
 | POST | /api/accounts/google/link/ | Authenticated |
