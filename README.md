@@ -17,7 +17,16 @@ Django REST Framework backend for an AI-powered ticket and customer support plat
 - Refresh-token revocation after password reset
 - Django superuser kept separate from the Application Admin role
 
-Ticket-management APIs, AI services, and the remaining enterprise modules are planned work; the current ticket app is a placeholder.
+## Implemented Backend Features
+
+- Authentication and role-based authorization for Admin, Agent and Customer.
+- Customer complaint submission and complaint tracking.
+- Agent access to pending customer complaints.
+- Agent-only complaint-to-ticket conversion.
+- Automatic category-based ticket number generation.
+- Role-based ticket visibility for Customers, Agents and Admins.
+
+AI services, advanced ticket operations, notifications, analytics and frontend development are planned enhancements.
 
 ## Requirements
 
@@ -27,13 +36,13 @@ Ticket-management APIs, AI services, and the remaining enterprise modules are pl
 
 Install dependencies from the backend directory:
 
-~~~powershell
+```powershell
 cd backend
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-~~~
+```
 
 ## Environment configuration
 
@@ -55,27 +64,27 @@ The default email backend is Django's console backend for local development. It 
 
 Create the MySQL database first, then run:
 
-~~~powershell
+```powershell
 python manage.py migrate
 python manage.py check
 python manage.py runserver
-~~~
+```
 
 The local API base URL is http://127.0.0.1:8000/api/accounts/.
 
 ## Authentication endpoints
 
-| Method | Endpoint | Access |
-|---|---|---|
-| POST | /api/accounts/register/ | Public |
-| POST | /api/accounts/login/ | Public; accepts username or email |
-| POST | /api/accounts/token/refresh/ | Public |
-| POST | /api/accounts/google/ | Public; requires Google ID token |
-| POST | /api/accounts/google/link/ | Authenticated |
-| POST | /api/accounts/logout/ | Authenticated |
-| GET, PATCH | /api/accounts/profile/ | Authenticated; only own profile |
-| POST | /api/accounts/forgot-password/ | Public |
-| POST | /api/accounts/reset-password/ | Public; requires valid UID/token |
+| Method     | Endpoint                       | Access                            |
+| ---------- | ------------------------------ | --------------------------------- |
+| POST       | /api/accounts/register/        | Public                            |
+| POST       | /api/accounts/login/           | Public; accepts username or email |
+| POST       | /api/accounts/token/refresh/   | Public                            |
+| POST       | /api/accounts/google/          | Public; requires Google ID token  |
+| POST       | /api/accounts/google/link/     | Authenticated                     |
+| POST       | /api/accounts/logout/          | Authenticated                     |
+| GET, PATCH | /api/accounts/profile/         | Authenticated; only own profile   |
+| POST       | /api/accounts/forgot-password/ | Public                            |
+| POST       | /api/accounts/reset-password/  | Public; requires valid UID/token  |
 
 Protected endpoints use the Authorization header with a Bearer access token.
 
@@ -89,18 +98,42 @@ The Google token must be valid for the configured client, have a verified email,
 
 ## Application roles
 
-- CUSTOMER
-- AGENT
-- MANAGER
-- ADMIN
+The system supports three application roles:
 
-Public registration always creates CUSTOMER; clients cannot select their own role. Profile updates cannot change the role.
+- CUSTOMER — submits complaints and views their own tickets.
+- AGENT — reviews pending complaints, converts complaints into tickets, and manages assigned tickets.
+- ADMIN — manages users, assigns application roles, and monitors all tickets.
 
-Role permission classes are in accounts/permissions.py and can be applied to future ticket endpoints. The role-management endpoint is:
+Public registration always creates a CUSTOMER account.
+Users cannot change their own roles.
+
+The role-management endpoint is:
 
 PATCH /api/accounts/users/<user_id>/role/
 
-It accepts a JSON body with a role field and requires an Application Admin access token. It prevents removal of the last active Application Admin.
+Only authenticated ADMIN users can assign roles.
+
+## Complaint and Ticket Management
+
+- Customers can submit multiple complaints.
+- Agents can view pending customer complaints.
+- Only Agents can convert complaints into tickets.
+- Each complaint can be converted into only one ticket.
+- Ticket numbers are generated automatically using category,
+  year, and a unique database ID.
+- Customers can view their own tickets.
+- Agents can view their assigned tickets.
+- Administrators can view all tickets.
+
+### Complaint and Ticket API Endpoints
+
+| Method | Endpoint                                | Access                 |
+| ------ | --------------------------------------- | ---------------------- |
+| POST   | /api/complaints/                        | Customer               |
+| GET    | /api/complaints/my/                     | Customer               |
+| GET    | /api/complaints/pending/                | Agent, Admin           |
+| POST   | /api/complaints/<complaint_id>/convert/ | Agent only             |
+| GET    | /api/tickets/                           | Customer, Agent, Admin |
 
 ### Bootstrap the first Application Admin
 
@@ -115,9 +148,9 @@ A Django superuser is not automatically an Application Admin. The distinction is
 
 Run from backend/:
 
-~~~powershell
+```powershell
 python manage.py test accounts
-~~~
+```
 
 The tests cover registration, JWT login/refresh/logout, profile role protection, Google login/linking, role management, password reset, and refresh-token revocation.
 

@@ -1,16 +1,17 @@
-name: Backend authentication tests
+name: Backend tests
 
 on:
   push:
     branches:
       - main
       - feature/complete-auth-authorization
+      - feature/complaint-ticket-management
   pull_request:
     branches:
       - main
 
 jobs:
-  accounts-tests:
+  backend-tests:
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -48,7 +49,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Django checks and account tests
+      - name: Run Django checks and all backend tests
         working-directory: backend
         env:
           SECRET_KEY: ci-only-not-for-production
@@ -64,4 +65,4 @@ jobs:
           DEFAULT_FROM_EMAIL: ci@example.test
         run: |
           python manage.py check
-          python manage.py test accounts
+          python manage.py test

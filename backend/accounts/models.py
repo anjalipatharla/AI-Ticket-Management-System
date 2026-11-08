@@ -8,7 +8,6 @@ class UserProfile(models.Model):
     class Role(models.TextChoices):
         CUSTOMER = "CUSTOMER", "Customer"
         AGENT = "AGENT", "Support Agent"
-        MANAGER = "MANAGER", "Manager"
         ADMIN = "ADMIN", "Application Admin"
 
     user = models.OneToOneField(
@@ -39,6 +38,7 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.role}"
+
 
 class GoogleIdentity(models.Model):
 
