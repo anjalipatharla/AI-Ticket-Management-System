@@ -1,15 +1,10 @@
+
 from rest_framework.permissions import BasePermission
 
 from .models import UserProfile
 
 
 class HasApplicationRole(BasePermission):
-    """
-    Base permission for application roles.
-
-    A Django superuser is not automatically an Application Admin. The
-    application role must be assigned explicitly to the user's profile.
-    """
 
     allowed_roles = frozenset()
 
@@ -20,6 +15,7 @@ class HasApplicationRole(BasePermission):
             return False
 
         profile = getattr(user, "profile", None)
+
         return bool(profile and profile.role in self.allowed_roles)
 
     def has_object_permission(self, request, view, obj):
@@ -34,24 +30,12 @@ class IsSupportAgent(HasApplicationRole):
     allowed_roles = {UserProfile.Role.AGENT}
 
 
-class IsManager(HasApplicationRole):
-    allowed_roles = {UserProfile.Role.MANAGER}
-
-
 class IsApplicationAdmin(HasApplicationRole):
     allowed_roles = {UserProfile.Role.ADMIN}
-
-
-class IsManagerOrAdmin(HasApplicationRole):
-    allowed_roles = {
-        UserProfile.Role.MANAGER,
-        UserProfile.Role.ADMIN,
-    }
 
 
 class IsAgentOrAbove(HasApplicationRole):
     allowed_roles = {
         UserProfile.Role.AGENT,
-        UserProfile.Role.MANAGER,
         UserProfile.Role.ADMIN,
     }
