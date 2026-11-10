@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
-from .models import Complaint, Ticket
+from .models import Complaint, Ticket, TicketHistory
 
 
 class ComplaintAndTicketAPITests(APITestCase):
@@ -433,3 +433,246 @@ class ComplaintAndTicketAPITests(APITestCase):
         self.assertTrue(
             ticket2.ticket_number.startswith("ACCT-")
         )
+
+    # 15. Customer can view own ticket details only
+    def test_customer_ticket_detail_access(self):
+        customer1 = self.create_user("customer3", UserProfile.Role.CUSTOMER)
+        customer2 = self.create_user("customer4", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent3", UserProfile.Role.AGENT)
+
+        ticket = self.create_ticket(customer1, agent)
+        other_ticket = self.create_ticket(customer2, agent)
+
+        self.client.force_authenticate(user=customer1)
+
+        response = self.client.get(f"/api/tickets/{ticket.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        response = self.client.get(f"/api/tickets/{other_ticket.id}/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # 16. Assigned Agent and Admin can view ticket details
+    def test_agent_and_admin_can_view_ticket_details(self):
+        customer = self.create_user("customer5", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent4", UserProfile.Role.AGENT)
+        admin = self.create_user("admin2", UserProfile.Role.ADMIN)
+
+        ticket = self.create_ticket(customer, agent)
+
+        for user in [agent, admin]:
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get(f"/api/tickets/{ticket.id}/")
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data["id"], ticket.id)
+
+    # 17. Assigned Agent can update ticket status and priority
+    def test_assigned_agent_can_update_ticket(self):
+        customer = self.create_user("customer6", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent5", UserProfile.Role.AGENT)
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "IN_PROGRESS", "priority": "HIGH"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ticket.refresh_from_db()
+
+        self.assertEqual(ticket.status, Ticket.Status.IN_PROGRESS)
+        self.assertEqual(ticket.priority, Ticket.Priority.HIGH)
+
+        self.assertEqual(
+            TicketHistory.objects.filter(ticket=ticket).count(), 2
+        )
+
+    # 18. Agent cannot update another Agent's ticket
+    def test_agent_cannot_update_unassigned_ticket(self):
+        customer = self.create_user("customer7", UserProfile.Role.CUSTOMER)
+        agent1 = self.create_user("agent6", UserProfile.Role.AGENT)
+        agent2 = self.create_user("agent7", UserProfile.Role.AGENT)
+
+        ticket = self.create_ticket(customer, agent1)
+
+        self.client.force_authenticate(user=agent2)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "IN_PROGRESS"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_403_FORBIDDEN
+        )
+
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, Ticket.Status.OPEN)
+
+    # 19. Customer cannot update ticket status or priority
+    def test_customer_cannot_update_ticket(self):
+        customer = self.create_user("customer8", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent8", UserProfile.Role.AGENT)
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_403_FORBIDDEN
+        )
+
+    # 20. Admin can update ticket status and priority
+    def test_admin_can_update_ticket(self):
+        customer = self.create_user("customer9", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent9", UserProfile.Role.AGENT)
+        admin = self.create_user("admin3", UserProfile.Role.ADMIN)
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED", "priority": "CRITICAL"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ticket.refresh_from_db()
+
+        self.assertEqual(ticket.status, Ticket.Status.RESOLVED)
+        self.assertEqual(ticket.priority, Ticket.Priority.CRITICAL)
+
+    # 21. Admin can reassign a ticket to another Agent
+    def test_admin_can_reassign_ticket(self):
+        customer = self.create_user("customer10", UserProfile.Role.CUSTOMER)
+        agent1 = self.create_user("agent10", UserProfile.Role.AGENT)
+        agent2 = self.create_user("agent11", UserProfile.Role.AGENT)
+        admin = self.create_user("admin4", UserProfile.Role.ADMIN)
+
+        ticket = self.create_ticket(customer, agent1)
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/assign/",
+            {"agent_id": agent2.id},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ticket.refresh_from_db()
+
+        self.assertEqual(ticket.assigned_agent, agent2)
+
+        history = TicketHistory.objects.get(ticket=ticket)
+
+        self.assertEqual(
+            history.action, TicketHistory.Action.REASSIGNED
+        )
+        self.assertEqual(history.old_value, agent1.username)
+        self.assertEqual(history.new_value, agent2.username)
+
+    # 22. Non-admin users cannot assign or reassign tickets
+    def test_agent_cannot_reassign_ticket(self):
+        customer = self.create_user("customer11", UserProfile.Role.CUSTOMER)
+        agent1 = self.create_user("agent12", UserProfile.Role.AGENT)
+        agent2 = self.create_user("agent13", UserProfile.Role.AGENT)
+
+        ticket = self.create_ticket(customer, agent1)
+
+        self.client.force_authenticate(user=agent1)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/assign/",
+            {"agent_id": agent2.id},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_403_FORBIDDEN
+        )
+
+    # 23. Admin cannot assign a ticket to a Customer
+    def test_admin_cannot_assign_ticket_to_customer(self):
+        customer1 = self.create_user("customer12", UserProfile.Role.CUSTOMER)
+        customer2 = self.create_user("customer13", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent14", UserProfile.Role.AGENT)
+        admin = self.create_user("admin5", UserProfile.Role.ADMIN)
+
+        ticket = self.create_ticket(customer1, agent)
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/assign/",
+            {"agent_id": customer2.id},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_400_BAD_REQUEST
+        )
+
+    # 24. Users with access can view ticket history
+    def test_ticket_history_access_and_tracking(self):
+        customer = self.create_user("customer14", UserProfile.Role.CUSTOMER)
+        other_customer = self.create_user(
+            "customer15", UserProfile.Role.CUSTOMER)
+        agent = self.create_user("agent15", UserProfile.Role.AGENT)
+        other_agent = self.create_user("agent16", UserProfile.Role.AGENT)
+        admin = self.create_user("admin6", UserProfile.Role.ADMIN)
+
+        ticket = self.create_ticket(customer, agent)
+
+        # Generate history by updating the ticket.
+        self.client.force_authenticate(user=agent)
+
+        self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "IN_PROGRESS"},
+            format="json"
+        )
+
+        # Customer, assigned Agent and Admin can view history.
+        for user in [customer, agent, admin]:
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get(
+                f"/api/tickets/{ticket.id}/history/"
+            )
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(len(response.data), 1)
+            self.assertEqual(
+                response.data[0]["action"],
+                TicketHistory.Action.STATUS_CHANGED
+            )
+
+        # Other Customer and unassigned Agent cannot view history.
+        for user in [other_customer, other_agent]:
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get(
+                f"/api/tickets/{ticket.id}/history/"
+            )
+
+            self.assertEqual(
+                response.status_code, status.HTTP_403_FORBIDDEN
+            )
