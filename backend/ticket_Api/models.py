@@ -135,3 +135,52 @@ class Ticket(models.Model):
 
     def __str__(self):
         return self.ticket_number or f"Ticket #{self.pk}"
+
+
+class TicketHistory(models.Model):
+
+    class Action(models.TextChoices):
+        CREATED = "CREATED", "Ticket Created"
+        STATUS_CHANGED = "STATUS_CHANGED", "Status Changed"
+        PRIORITY_CHANGED = "PRIORITY_CHANGED", "Priority Changed"
+        ASSIGNED = "ASSIGNED", "Agent Assigned"
+        REASSIGNED = "REASSIGNED", "Agent Reassigned"
+
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="history"
+    )
+
+    action = models.CharField(
+        max_length=30,
+        choices=Action.choices
+    )
+
+    changed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ticket_history_actions"
+    )
+
+    old_value = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    new_value = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    comment = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"{self.ticket.ticket_number} - {self.action}"
