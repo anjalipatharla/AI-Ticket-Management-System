@@ -38,6 +38,23 @@ class Complaint(models.Model):
         default=Status.PENDING
     )
 
+    ai_suggested_priority = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True
+    )
+
+    ai_sentiment = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True
+    )
+
+    ai_summary = models.TextField(
+        blank=True,
+        null=True
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

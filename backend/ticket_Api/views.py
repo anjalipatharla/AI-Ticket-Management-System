@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from .ai_services.complaint_classifier import classify_complaint
 
 # Django REST Framework imports
 from rest_framework import generics, status
@@ -40,15 +41,57 @@ from .serializers import (
     TicketUpdateSerializer,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 # 1. Customer submits a complaint
+
 class ComplaintCreateView(generics.CreateAPIView):
 
     serializer_class = ComplaintSerializer
     permission_classes = [IsCustomer]
 
-    def perform_create(self, serializer):
-        serializer.save(customer=self.request.user)
+    def create(self, request, *args, **kwargs):
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # 1. Get complaint details
+        subject = serializer.validated_data["subject"]
+        description = serializer.validated_data["description"]
+
+        # 2. Ask Gemini to classify the complaint
+        try:
+            ai_result = classify_complaint(subject, description)
+        except Exception:
+            logger.exception("Gemini AI classification failed.")
+
+            ai_result = {
+                "category": "OTHER",
+                "priority": "MEDIUM",
+                "sentiment": "NEUTRAL",
+                "summary": "AI classification is currently unavailable."
+            }
+
+        # 3. Save complaint using AI-suggested category
+        complaint = serializer.save(
+            customer=request.user,
+            category=ai_result["category"],
+            ai_suggested_priority=ai_result["priority"],
+            ai_sentiment=ai_result["sentiment"],
+            ai_summary=ai_result["summary"]
+        )
+
+        # 4. Prepare API response
+        response_data = {
+            "complaint": self.get_serializer(complaint).data,
+            "ai_classification": ai_result
+        }
+
+        headers = self.get_success_headers(serializer.data)
+
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 # 2. Customer views their own complaints
@@ -83,17 +126,6 @@ class ConvertComplaintToTicketView(APIView):
 
     def post(self, request, complaint_id):
 
-        priority = request.data.get(
-            "priority",
-            Ticket.Priority.MEDIUM
-        )
-
-        if priority not in Ticket.Priority.values:
-            return Response(
-                {"error": "Invalid ticket priority."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         with transaction.atomic():
 
             # Get and lock the complaint
@@ -102,6 +134,20 @@ class ConvertComplaintToTicketView(APIView):
                 id=complaint_id
             )
 
+            # Get priority from Agent, otherwise use Gemini suggestion
+            priority = request.data.get("priority")
+
+            if priority is None:
+                priority = complaint.ai_suggested_priority or Ticket.Priority.MEDIUM
+
+            # Validate priority
+            if priority not in Ticket.Priority.values:
+                return Response(
+                    {"error": "Invalid ticket priority."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Prevent duplicate conversion
             if (
                 complaint.status != Complaint.Status.PENDING
                 or Ticket.objects.filter(complaint=complaint).exists()
@@ -176,7 +222,21 @@ class ConvertComplaintToTicketView(APIView):
                 comment="Ticket created from customer complaint."
             )
 
-            # Record initial Agent assignment
+            # Record priority selection during ticket creation
+            ticket.history.create(
+                action=TicketHistory.Action.PRIORITY_CHANGED,
+                changed_by=request.user,
+                old_value=complaint.ai_suggested_priority or "NONE",
+                new_value=priority,
+                comment=(
+                    "Agent overrode AI-suggested priority."
+                    if request.data.get("priority") is not None
+                    else "Priority selected using AI suggestion or MEDIUM fallback."
+                )
+
+            )
+
+            # 6. Record initial Agent assignment
             ticket.history.create(
                 action=TicketHistory.Action.ASSIGNED,
                 changed_by=request.user,
@@ -184,8 +244,11 @@ class ConvertComplaintToTicketView(APIView):
                 comment="Ticket initially assigned to converting agent."
             )
 
+            # 7. Update complaint status
             complaint.status = Complaint.Status.CONVERTED
-            complaint.save(update_fields=["status", "updated_at"])
+            complaint.save(
+                update_fields=["status", "updated_at"]
+            )
 
         return Response(
             TicketSerializer(ticket).data,
@@ -392,7 +455,9 @@ class TicketAssignmentView(APIView):
         with transaction.atomic():
 
             ticket.assigned_agent = new_agent
-            ticket.save(update_fields=["assigned_agent", "updated_at"])
+            ticket.save(
+                update_fields=["assigned_agent", "updated_at"]
+            )
 
             # Record Agent reassignment
             ticket.history.create(

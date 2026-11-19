@@ -24,6 +24,9 @@ class ComplaintSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "updated_at",
+            "ai_suggested_priority",
+            "ai_sentiment",
+            "ai_summary",
         ]
 
         read_only_fields = [
@@ -32,7 +35,15 @@ class ComplaintSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "updated_at",
+            "ai_suggested_priority",
+            "ai_sentiment",
+            "ai_summary",
         ]
+        extra_kwargs = {
+            "category": {
+                "required": False
+            }
+        }
 
 
 class TicketSerializer(serializers.ModelSerializer):
