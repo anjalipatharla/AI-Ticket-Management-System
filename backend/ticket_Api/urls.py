@@ -10,6 +10,7 @@ from .views import (
     TicketUpdateView,
     TicketAssignmentView,
     TicketHistoryView,
+    FirstResponseView,
 )
 
 from django.contrib.auth.models import User
@@ -40,4 +41,7 @@ urlpatterns = [
          TicketAssignmentView.as_view(), name="ticket-assign"),
     path("tickets/<int:ticket_id>/history/",
          TicketHistoryView.as_view(), name="ticket-history"),
+    # SLA APIs
+    path("tickets/<int:ticket_id>/first-response/",
+         FirstResponseView.as_view(), name="ticket-first-response"),
 ]
