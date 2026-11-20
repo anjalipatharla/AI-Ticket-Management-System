@@ -1263,3 +1263,169 @@ class ComplaintAndTicketAPITests(APITestCase):
             TicketEscalation.objects.filter(ticket=ticket).count(),
             0
         )
+
+        # 38. Reopening a resolved ticket resets resolution SLA
+
+    def test_reopening_resolved_ticket_resets_resolution_sla(self):
+
+        customer = self.create_user(
+            "reopen_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "reopen_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        # First resolve the ticket
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        sla.refresh_from_db()
+        self.assertIsNotNone(sla.resolved_at)
+
+        # Reopen the ticket
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "IN_PROGRESS"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        sla.refresh_from_db()
+
+        self.assertIsNone(sla.resolved_at)
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.PENDING
+        )
+
+    # 39. Changing ticket priority recalculates SLA deadlines
+
+    def test_priority_change_recalculates_sla(self):
+
+        customer = self.create_user(
+            "priority_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "priority_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        # Select another active SLA policy
+        new_policy = SLAPolicy.objects.filter(
+            is_active=True
+        ).exclude(
+            priority=ticket.priority
+        ).first()
+
+        self.assertIsNotNone(new_policy)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"priority": new_policy.priority},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+        ticket.refresh_from_db()
+
+        self.assertEqual(ticket.priority, new_policy.priority)
+
+        # Verify the new SLA policy
+        self.assertEqual(sla.policy, new_policy)
+
+        # Verify updated target durations
+        self.assertEqual(
+            sla.response_target_minutes,
+            new_policy.response_time_minutes
+        )
+
+        self.assertEqual(
+            sla.resolution_target_minutes,
+            new_policy.resolution_time_minutes
+        )
+
+        # Verify recalculated deadlines
+        self.assertEqual(
+            sla.response_deadline,
+            ticket.created_at + timedelta(
+                minutes=new_policy.response_time_minutes
+            )
+        )
+
+        self.assertEqual(
+            sla.resolution_deadline,
+            ticket.created_at + timedelta(
+                minutes=new_policy.resolution_time_minutes
+            )
+        )
+
+    # 40. Priority change is rejected when no active SLA policy exists
+
+    def test_priority_change_rejected_without_active_sla_policy(self):
+
+        customer = self.create_user(
+            "inactive_policy_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "inactive_policy_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        original_priority = ticket.priority
+        original_policy = sla.policy
+
+        # Deactivate all policies for other priorities
+        SLAPolicy.objects.exclude(
+            priority=original_priority
+        ).update(is_active=False)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"priority": "CRITICAL"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        ticket.refresh_from_db()
+        sla.refresh_from_db()
+
+        # Verify transaction rollback
+        self.assertEqual(ticket.priority, original_priority)
+        self.assertEqual(sla.policy, original_policy)

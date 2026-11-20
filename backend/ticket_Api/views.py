@@ -12,6 +12,7 @@ from .ai_services.complaint_classifier import classify_complaint
 # Django REST Framework imports
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -364,6 +365,75 @@ class TicketUpdateView(APIView):
             old_priority = ticket.priority
 
             ticket = serializer.save()
+
+            # Recalculate SLA when ticket priority changes
+            if old_priority != ticket.priority:
+                sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
+                if sla:
+                    new_policy = SLAPolicy.objects.filter(
+                        priority=ticket.priority, is_active=True).first()
+
+                    if not new_policy:
+                        raise ValidationError(
+                            {"priority": "No active SLA policy exists for this priority."}
+                        )
+
+                    sla.policy = new_policy
+                    sla.response_target_minutes = new_policy.response_time_minutes
+                    sla.resolution_target_minutes = new_policy.resolution_time_minutes
+
+                    sla.response_deadline = (
+                        ticket.created_at + timedelta(minutes=new_policy.response_time_minutes))
+
+                    sla.resolution_deadline = (
+                        ticket.created_at
+                        + timedelta(minutes=new_policy.resolution_time_minutes)
+                    )
+                    now = timezone.now()
+                    sla.last_checked_at = now
+
+                    if sla.first_response_at:
+                        sla.response_status = (
+                            TicketSLA.Status.MET
+                            if sla.first_response_at <= sla.response_deadline
+                            else TicketSLA.Status.BREACHED
+                        )
+
+                    if sla.resolved_at:
+                        sla.resolution_status = (
+                            TicketSLA.Status.MET
+                            if sla.resolved_at <= sla.resolution_deadline
+                            else TicketSLA.Status.BREACHED
+                        )
+                    sla.save()
+
+            # Reset resolution SLA when a resolved/closed ticket is reopened
+            if (
+                    old_status in [
+                        Ticket.Status.RESOLVED,
+                        Ticket.Status.CLOSED
+                    ]
+                and ticket.status not in [
+                        Ticket.Status.RESOLVED,
+                        Ticket.Status.CLOSED
+                        ]
+            ):
+
+                sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
+
+                if sla:
+                    sla.resolved_at = None
+                    sla.resolution_status = TicketSLA.Status.PENDING
+                    sla.last_checked_at = timezone.now()
+
+                    sla.save(
+                        update_fields=[
+                            "resolved_at",
+                            "resolution_status",
+                            "last_checked_at",
+                            "updated_at"
+                        ]
+                    )
 
             # Record resolution SLA when ticket is resolved or closed
             if (

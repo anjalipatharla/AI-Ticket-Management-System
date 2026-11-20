@@ -13,13 +13,6 @@ from .views import (
     FirstResponseView,
 )
 
-from django.contrib.auth.models import User
-
-from rest_framework import serializers
-
-from accounts.models import UserProfile
-from .models import Complaint, Ticket, TicketHistory
-
 urlpatterns = [
     # Customer APIs
     path("complaints/", ComplaintCreateView.as_view(), name="submit-complaint"),
