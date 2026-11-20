@@ -7,7 +7,11 @@ from pathlib import Path
 
 from decouple import config as env
 
+from dotenv import load_dotenv
+import os
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # All secrets and environment-specific values belong in backend/.env.
 SECRET_KEY = env("SECRET_KEY")
@@ -138,3 +142,5 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

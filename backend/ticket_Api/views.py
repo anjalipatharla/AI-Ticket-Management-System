@@ -1,12 +1,18 @@
 
+# Standard Python imports
+from datetime import timedelta
+from django.utils import timezone
+
 # Django imports
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from .ai_services.complaint_classifier import classify_complaint
 
 # Django REST Framework imports
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -18,8 +24,16 @@ from accounts.permissions import (
     IsSupportAgent,
 )
 
-# Ticket API imports
-from .models import Complaint, Ticket, TicketHistory
+# Ticket API model imports
+from .models import (
+    Complaint,
+    Ticket,
+    TicketHistory,
+    SLAPolicy,
+    TicketSLA,
+)
+
+# Ticket API serializer imports
 from .serializers import (
     ComplaintSerializer,
     TicketAssignmentSerializer,
@@ -28,15 +42,57 @@ from .serializers import (
     TicketUpdateSerializer,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 # 1. Customer submits a complaint
+
 class ComplaintCreateView(generics.CreateAPIView):
 
     serializer_class = ComplaintSerializer
     permission_classes = [IsCustomer]
 
-    def perform_create(self, serializer):
-        serializer.save(customer=self.request.user)
+    def create(self, request, *args, **kwargs):
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # 1. Get complaint details
+        subject = serializer.validated_data["subject"]
+        description = serializer.validated_data["description"]
+
+        # 2. Ask Gemini to classify the complaint
+        try:
+            ai_result = classify_complaint(subject, description)
+        except Exception:
+            logger.exception("Gemini AI classification failed.")
+
+            ai_result = {
+                "category": "OTHER",
+                "priority": "MEDIUM",
+                "sentiment": "NEUTRAL",
+                "summary": "AI classification is currently unavailable."
+            }
+
+        # 3. Save complaint using AI-suggested category
+        complaint = serializer.save(
+            customer=request.user,
+            category=ai_result["category"],
+            ai_suggested_priority=ai_result["priority"],
+            ai_sentiment=ai_result["sentiment"],
+            ai_summary=ai_result["summary"]
+        )
+
+        # 4. Prepare API response
+        response_data = {
+            "complaint": self.get_serializer(complaint).data,
+            "ai_classification": ai_result
+        }
+
+        headers = self.get_success_headers(serializer.data)
+
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 # 2. Customer views their own complaints
@@ -64,30 +120,35 @@ class PendingComplaintsView(generics.ListAPIView):
 
 
 # 4. Agent converts a complaint into a ticket
+#    and automatically creates its SLA record
 class ConvertComplaintToTicketView(APIView):
 
     permission_classes = [IsSupportAgent]
 
     def post(self, request, complaint_id):
 
-        priority = request.data.get(
-            "priority",
-            Ticket.Priority.MEDIUM
-        )
-
-        if priority not in Ticket.Priority.values:
-            return Response(
-                {"error": "Invalid ticket priority."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         with transaction.atomic():
 
+            # Get and lock the complaint
             complaint = get_object_or_404(
                 Complaint.objects.select_for_update(),
                 id=complaint_id
             )
 
+            # Get priority from Agent, otherwise use Gemini suggestion
+            priority = request.data.get("priority")
+
+            if priority is None:
+                priority = complaint.ai_suggested_priority or Ticket.Priority.MEDIUM
+
+            # Validate priority
+            if priority not in Ticket.Priority.values:
+                return Response(
+                    {"error": "Invalid ticket priority."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Prevent duplicate conversion
             if (
                 complaint.status != Complaint.Status.PENDING
                 or Ticket.objects.filter(complaint=complaint).exists()
@@ -97,6 +158,24 @@ class ConvertComplaintToTicketView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # 1. Find the active SLA policy BEFORE creating the ticket
+            sla_policy = SLAPolicy.objects.filter(
+                priority=priority,
+                is_active=True
+            ).first()
+
+            if not sla_policy:
+                return Response(
+                    {
+                        "error": (
+                            f"No active SLA policy configured "
+                            f"for {priority} priority."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 2. Create the ticket
             ticket = Ticket.objects.create(
                 complaint=complaint,
                 customer=complaint.customer,
@@ -107,7 +186,36 @@ class ConvertComplaintToTicketView(APIView):
                 priority=priority
             )
 
-            # Record initial ticket creation
+            # 3. Calculate response and resolution deadlines
+            response_deadline = (
+                ticket.created_at
+                + timedelta(
+                    minutes=sla_policy.response_time_minutes
+                )
+            )
+
+            resolution_deadline = (
+                ticket.created_at
+                + timedelta(
+                    minutes=sla_policy.resolution_time_minutes
+                )
+            )
+
+            # 4. Create SLA tracking record
+            TicketSLA.objects.create(
+                ticket=ticket,
+                policy=sla_policy,
+                response_target_minutes=(
+                    sla_policy.response_time_minutes
+                ),
+                resolution_target_minutes=(
+                    sla_policy.resolution_time_minutes
+                ),
+                response_deadline=response_deadline,
+                resolution_deadline=resolution_deadline
+            )
+
+            # 5. Record initial ticket creation
             ticket.history.create(
                 action=TicketHistory.Action.CREATED,
                 changed_by=request.user,
@@ -115,7 +223,21 @@ class ConvertComplaintToTicketView(APIView):
                 comment="Ticket created from customer complaint."
             )
 
-            # Record initial Agent assignment
+            # Record priority selection during ticket creation
+            ticket.history.create(
+                action=TicketHistory.Action.PRIORITY_CHANGED,
+                changed_by=request.user,
+                old_value=complaint.ai_suggested_priority or "NONE",
+                new_value=priority,
+                comment=(
+                    "Agent overrode AI-suggested priority."
+                    if request.data.get("priority") is not None
+                    else "Priority selected using AI suggestion or MEDIUM fallback."
+                )
+
+            )
+
+            # 6. Record initial Agent assignment
             ticket.history.create(
                 action=TicketHistory.Action.ASSIGNED,
                 changed_by=request.user,
@@ -123,8 +245,11 @@ class ConvertComplaintToTicketView(APIView):
                 comment="Ticket initially assigned to converting agent."
             )
 
+            # 7. Update complaint status
             complaint.status = Complaint.Status.CONVERTED
-            complaint.save(update_fields=["status", "updated_at"])
+            complaint.save(
+                update_fields=["status", "updated_at"]
+            )
 
         return Response(
             TicketSerializer(ticket).data,
@@ -241,6 +366,109 @@ class TicketUpdateView(APIView):
 
             ticket = serializer.save()
 
+            # Recalculate SLA when ticket priority changes
+            if old_priority != ticket.priority:
+                sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
+                if sla:
+                    new_policy = SLAPolicy.objects.filter(
+                        priority=ticket.priority, is_active=True).first()
+
+                    if not new_policy:
+                        raise ValidationError(
+                            {"priority": "No active SLA policy exists for this priority."}
+                        )
+
+                    sla.policy = new_policy
+                    sla.response_target_minutes = new_policy.response_time_minutes
+                    sla.resolution_target_minutes = new_policy.resolution_time_minutes
+
+                    sla.response_deadline = (
+                        ticket.created_at + timedelta(minutes=new_policy.response_time_minutes))
+
+                    sla.resolution_deadline = (
+                        ticket.created_at
+                        + timedelta(minutes=new_policy.resolution_time_minutes)
+                    )
+                    now = timezone.now()
+                    sla.last_checked_at = now
+
+                    if sla.first_response_at:
+                        sla.response_status = (
+                            TicketSLA.Status.MET
+                            if sla.first_response_at <= sla.response_deadline
+                            else TicketSLA.Status.BREACHED
+                        )
+
+                    if sla.resolved_at:
+                        sla.resolution_status = (
+                            TicketSLA.Status.MET
+                            if sla.resolved_at <= sla.resolution_deadline
+                            else TicketSLA.Status.BREACHED
+                        )
+                    sla.save()
+
+            # Reset resolution SLA when a resolved/closed ticket is reopened
+            if (
+                    old_status in [
+                        Ticket.Status.RESOLVED,
+                        Ticket.Status.CLOSED
+                    ]
+                and ticket.status not in [
+                        Ticket.Status.RESOLVED,
+                        Ticket.Status.CLOSED
+                        ]
+            ):
+
+                sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
+
+                if sla:
+                    sla.resolved_at = None
+                    sla.resolution_status = TicketSLA.Status.PENDING
+                    sla.last_checked_at = timezone.now()
+
+                    sla.save(
+                        update_fields=[
+                            "resolved_at",
+                            "resolution_status",
+                            "last_checked_at",
+                            "updated_at"
+                        ]
+                    )
+
+            # Record resolution SLA when ticket is resolved or closed
+            if (
+                old_status != ticket.status
+                and ticket.status in [
+                    Ticket.Status.RESOLVED,
+                    Ticket.Status.CLOSED
+                ]
+            ):
+                sla = TicketSLA.objects.select_for_update().filter(
+                    ticket=ticket
+                ).first()
+
+                # Older tickets may not have SLA records
+                if sla and not sla.resolved_at:
+
+                    resolution_time = timezone.now()
+
+                    sla.resolved_at = resolution_time
+                    sla.last_checked_at = resolution_time
+
+                    if resolution_time <= sla.resolution_deadline:
+                        sla.resolution_status = TicketSLA.Status.MET
+                    else:
+                        sla.resolution_status = TicketSLA.Status.BREACHED
+
+                    sla.save(
+                        update_fields=[
+                            "resolved_at",
+                            "resolution_status",
+                            "last_checked_at",
+                            "updated_at"
+                        ]
+                    )
+
             # Record status changes
             if old_status != ticket.status:
                 ticket.history.create(
@@ -297,7 +525,9 @@ class TicketAssignmentView(APIView):
         with transaction.atomic():
 
             ticket.assigned_agent = new_agent
-            ticket.save(update_fields=["assigned_agent", "updated_at"])
+            ticket.save(
+                update_fields=["assigned_agent", "updated_at"]
+            )
 
             # Record Agent reassignment
             ticket.history.create(
@@ -334,5 +564,88 @@ class TicketHistoryView(APIView):
 
         return Response(
             serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    # 10. Assigned Agent records the first response
+
+
+class FirstResponseView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, ticket_id):
+
+        ticket = get_object_or_404(Ticket, pk=ticket_id)
+
+        profile = getattr(request.user, "profile", None)
+
+        # Only the assigned Agent can record the first response
+        if (
+            not profile
+            or profile.role != UserProfile.Role.AGENT
+            or ticket.assigned_agent_id != request.user.id
+        ):
+            return Response(
+                {"detail": "Only the assigned Agent can record the first response."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        with transaction.atomic():
+
+            # Lock SLA record to prevent duplicate first responses
+            sla = TicketSLA.objects.select_for_update().filter(
+                ticket=ticket
+            ).first()
+
+            if not sla:
+                return Response(
+                    {"error": "SLA tracking record not found."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if sla.first_response_at:
+                return Response(
+                    {"error": "First response has already been recorded."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Record the first response time
+            first_response_time = timezone.now()
+
+            sla.first_response_at = first_response_time
+            sla.last_checked_at = first_response_time
+
+            # Check whether response SLA was met
+            if first_response_time <= sla.response_deadline:
+                sla.response_status = TicketSLA.Status.MET
+            else:
+                sla.response_status = TicketSLA.Status.BREACHED
+
+            sla.save(
+                update_fields=[
+                    "first_response_at",
+                    "response_status",
+                    "last_checked_at",
+                    "updated_at"
+                ]
+            )
+
+            # Record the action in ticket history
+            ticket.history.create(
+                action=TicketHistory.Action.FIRST_RESPONSE_RECORDED,
+                changed_by=request.user,
+                new_value=first_response_time.isoformat(),
+                comment=f"First response recorded. SLA status: {sla.response_status}."
+            )
+
+        return Response(
+            {
+                "message": "First response recorded successfully.",
+                "ticket_number": ticket.ticket_number,
+                "first_response_at": sla.first_response_at,
+                "response_deadline": sla.response_deadline,
+                "response_status": sla.response_status
+            },
             status=status.HTTP_200_OK
         )

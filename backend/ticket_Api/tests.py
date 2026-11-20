@@ -1,12 +1,14 @@
 
 from django.contrib.auth.models import User
 from django.utils import timezone
+from datetime import timedelta
 
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
-from .models import Complaint, Ticket, TicketHistory
+from .models import Complaint, Ticket, TicketHistory, TicketSLA, SLAPolicy, TicketEscalation
+from .sla_monitor import process_sla_monitoring
 
 
 class ComplaintAndTicketAPITests(APITestCase):
@@ -676,3 +678,754 @@ class ComplaintAndTicketAPITests(APITestCase):
             self.assertEqual(
                 response.status_code, status.HTTP_403_FORBIDDEN
             )
+
+    # 25. Ticket conversion automatically creates SLA deadlines
+
+    def test_ticket_conversion_creates_sla(self):
+
+        customer = self.create_user(
+            "sla_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "sla_agent",
+            UserProfile.Role.AGENT
+        )
+
+        complaint = self.create_complaint(customer)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/complaints/{complaint.id}/convert/",
+            {"priority": "HIGH"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        ticket = Ticket.objects.get(complaint=complaint)
+
+        sla = TicketSLA.objects.get(ticket=ticket)
+
+        # Verify SLA policy
+        self.assertEqual(sla.policy.priority, "HIGH")
+
+        # Verify response and resolution targets
+        self.assertEqual(sla.response_target_minutes, 60)
+        self.assertEqual(sla.resolution_target_minutes, 480)
+
+        # Verify calculated deadlines
+        self.assertEqual(
+            sla.response_deadline,
+            ticket.created_at + timezone.timedelta(minutes=60)
+        )
+
+        self.assertEqual(
+            sla.resolution_deadline,
+            ticket.created_at + timezone.timedelta(minutes=480)
+        )
+
+        # Verify initial SLA statuses
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.PENDING
+        )
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.PENDING
+        )
+
+    def create_sla_for_ticket(self, ticket, response_deadline=None):
+
+        policy = SLAPolicy.objects.get(
+            priority=ticket.priority
+        )
+
+        now = timezone.now()
+
+        return TicketSLA.objects.create(
+            ticket=ticket,
+            policy=policy,
+            response_target_minutes=policy.response_time_minutes,
+            resolution_target_minutes=policy.resolution_time_minutes,
+            response_deadline=(
+                response_deadline or now + timedelta(hours=1)
+            ),
+            resolution_deadline=now + timedelta(hours=8)
+        )
+
+    # 26. Assigned Agent can record first response within SLA
+    def test_agent_can_record_first_response_within_sla(self):
+
+        customer = self.create_user(
+            "response_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "response_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla = TicketSLA.objects.get(ticket=ticket)
+
+        self.assertIsNotNone(sla.first_response_at)
+
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.MET
+        )
+
+        self.assertTrue(
+            TicketHistory.objects.filter(
+                ticket=ticket,
+                action=TicketHistory.Action.FIRST_RESPONSE_RECORDED,
+                changed_by=agent
+            ).exists()
+        )
+
+    # 27. First response after deadline breaches response SLA
+    def test_first_response_after_deadline_is_breached(self):
+
+        customer = self.create_user(
+            "late_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "late_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        past_deadline = timezone.now() - timedelta(minutes=5)
+
+        self.create_sla_for_ticket(
+            ticket,
+            response_deadline=past_deadline
+        )
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla = TicketSLA.objects.get(ticket=ticket)
+
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.BREACHED
+        )
+
+    # 28. Customer cannot record first response
+    def test_customer_cannot_record_first_response(self):
+
+        customer = self.create_user(
+            "response_customer2",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "response_agent2",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        sla = TicketSLA.objects.get(ticket=ticket)
+
+        self.assertIsNone(sla.first_response_at)
+
+    # 29. Unassigned Agent cannot record first response
+    def test_unassigned_agent_cannot_record_first_response(self):
+
+        customer = self.create_user(
+            "response_customer3",
+            UserProfile.Role.CUSTOMER
+        )
+
+        assigned_agent = self.create_user(
+            "assigned_agent3",
+            UserProfile.Role.AGENT
+        )
+
+        other_agent = self.create_user(
+            "other_agent3",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, assigned_agent)
+        self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=other_agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+    # 30. First response cannot be recorded twice
+    def test_first_response_cannot_be_recorded_twice(self):
+
+        customer = self.create_user(
+            "response_customer4",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "response_agent4",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        first_response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        second_response = self.client.post(
+            f"/api/tickets/{ticket.id}/first-response/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        self.assertEqual(
+            TicketHistory.objects.filter(
+                ticket=ticket,
+                action=TicketHistory.Action.FIRST_RESPONSE_RECORDED
+            ).count(),
+            1
+        )
+
+    # 31. Agent resolves ticket within the resolution SLA
+
+    def test_agent_resolves_ticket_within_sla(self):
+
+        customer = self.create_user(
+            "resolve_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "resolve_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+
+        self.assertIsNotNone(sla.resolved_at)
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.MET
+        )
+
+    # 32. Agent resolves ticket after the resolution deadline
+    def test_agent_resolves_ticket_after_sla_deadline(self):
+
+        customer = self.create_user(
+            "late_resolve_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "late_resolve_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        sla = self.create_sla_for_ticket(ticket)
+
+        sla.resolution_deadline = (
+            timezone.now() - timedelta(minutes=5)
+        )
+        sla.save(update_fields=["resolution_deadline"])
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.BREACHED
+        )
+
+    # 33. Closing a ticket records resolution SLA
+    def test_closing_ticket_records_resolution_sla(self):
+
+        customer = self.create_user(
+            "close_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "close_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "CLOSED"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+
+        self.assertIsNotNone(sla.resolved_at)
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.MET
+        )
+
+    # 34. Resolution timestamp is not overwritten when ticket is closed
+    def test_resolution_timestamp_is_preserved(self):
+
+        customer = self.create_user(
+            "timestamp_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "timestamp_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        # First resolve the ticket
+        self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        sla.refresh_from_db()
+        original_timestamp = sla.resolved_at
+
+        # Then close the ticket
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "CLOSED"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+
+        self.assertEqual(
+            sla.resolved_at,
+            original_timestamp
+        )
+
+    # 35. Monitoring detects response and resolution SLA breaches
+
+    def test_monitor_detects_sla_breaches_and_creates_escalations(self):
+
+        customer = self.create_user(
+            "monitor_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "monitor_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        now = timezone.now()
+        past_deadline = now - timedelta(minutes=75)
+
+        sla.response_deadline = past_deadline
+        sla.resolution_deadline = past_deadline
+        sla.save(
+            update_fields=[
+                "response_deadline",
+                "resolution_deadline"
+            ]
+        )
+
+        results = process_sla_monitoring(now=now)
+
+        sla.refresh_from_db()
+
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.BREACHED
+        )
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.BREACHED
+        )
+
+        self.assertEqual(results["response_breaches"], 1)
+        self.assertEqual(results["resolution_breaches"], 1)
+        self.assertEqual(results["escalations_created"], 6)
+
+        self.assertEqual(
+            TicketEscalation.objects.filter(ticket=ticket).count(),
+            6
+        )
+
+    # 36. Repeated monitoring must not create duplicate escalations
+    def test_monitor_does_not_create_duplicate_escalations(self):
+
+        customer = self.create_user(
+            "duplicate_monitor_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "duplicate_monitor_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        now = timezone.now()
+        past_deadline = now - timedelta(minutes=75)
+
+        sla.response_deadline = past_deadline
+        sla.resolution_deadline = past_deadline
+        sla.save(
+            update_fields=[
+                "response_deadline",
+                "resolution_deadline"
+            ]
+        )
+
+        first_run = process_sla_monitoring(now=now)
+        second_run = process_sla_monitoring(now=now)
+
+        self.assertEqual(
+            first_run["escalations_created"], 6
+        )
+
+        self.assertEqual(
+            second_run["escalations_created"], 0
+        )
+
+        self.assertEqual(
+            TicketEscalation.objects.filter(ticket=ticket).count(),
+            6
+        )
+
+    # 37. Monitoring does not escalate tickets within SLA
+    def test_monitor_does_not_escalate_tickets_within_sla(self):
+
+        customer = self.create_user(
+            "safe_monitor_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "safe_monitor_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        now = timezone.now()
+
+        results = process_sla_monitoring(now=now)
+
+        sla.refresh_from_db()
+
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.PENDING
+        )
+
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.PENDING
+        )
+
+        self.assertEqual(results["escalations_created"], 0)
+
+        self.assertEqual(
+            TicketEscalation.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+        # 38. Reopening a resolved ticket resets resolution SLA
+
+    def test_reopening_resolved_ticket_resets_resolution_sla(self):
+
+        customer = self.create_user(
+            "reopen_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "reopen_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        self.client.force_authenticate(user=agent)
+
+        # First resolve the ticket
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "RESOLVED"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        sla.refresh_from_db()
+        self.assertIsNotNone(sla.resolved_at)
+
+        # Reopen the ticket
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"status": "IN_PROGRESS"},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        sla.refresh_from_db()
+
+        self.assertIsNone(sla.resolved_at)
+        self.assertEqual(
+            sla.resolution_status,
+            TicketSLA.Status.PENDING
+        )
+
+    # 39. Changing ticket priority recalculates SLA deadlines
+
+    def test_priority_change_recalculates_sla(self):
+
+        customer = self.create_user(
+            "priority_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "priority_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        # Select another active SLA policy
+        new_policy = SLAPolicy.objects.filter(
+            is_active=True
+        ).exclude(
+            priority=ticket.priority
+        ).first()
+
+        self.assertIsNotNone(new_policy)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"priority": new_policy.priority},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        sla.refresh_from_db()
+        ticket.refresh_from_db()
+
+        self.assertEqual(ticket.priority, new_policy.priority)
+
+        # Verify the new SLA policy
+        self.assertEqual(sla.policy, new_policy)
+
+        # Verify updated target durations
+        self.assertEqual(
+            sla.response_target_minutes,
+            new_policy.response_time_minutes
+        )
+
+        self.assertEqual(
+            sla.resolution_target_minutes,
+            new_policy.resolution_time_minutes
+        )
+
+        # Verify recalculated deadlines
+        self.assertEqual(
+            sla.response_deadline,
+            ticket.created_at + timedelta(
+                minutes=new_policy.response_time_minutes
+            )
+        )
+
+        self.assertEqual(
+            sla.resolution_deadline,
+            ticket.created_at + timedelta(
+                minutes=new_policy.resolution_time_minutes
+            )
+        )
+
+    # 40. Priority change is rejected when no active SLA policy exists
+
+    def test_priority_change_rejected_without_active_sla_policy(self):
+
+        customer = self.create_user(
+            "inactive_policy_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "inactive_policy_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+        sla = self.create_sla_for_ticket(ticket)
+
+        original_priority = ticket.priority
+        original_policy = sla.policy
+
+        # Deactivate all policies for other priorities
+        SLAPolicy.objects.exclude(
+            priority=original_priority
+        ).update(is_active=False)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.patch(
+            f"/api/tickets/{ticket.id}/update/",
+            {"priority": "CRITICAL"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        ticket.refresh_from_db()
+        sla.refresh_from_db()
+
+        # Verify transaction rollback
+        self.assertEqual(ticket.priority, original_priority)
+        self.assertEqual(sla.policy, original_policy)
