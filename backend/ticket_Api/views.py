@@ -22,6 +22,7 @@ from accounts.permissions import (
     IsAgentOrAbove,
     IsCustomer,
     IsSupportAgent,
+    IsApplicationAdmin,
 )
 
 # Ticket API model imports
@@ -31,6 +32,9 @@ from .models import (
     TicketHistory,
     SLAPolicy,
     TicketSLA,
+    KnowledgeCategory,
+    KnowledgeArticle,
+    FAQ,
 )
 
 # Ticket API serializer imports
@@ -40,6 +44,9 @@ from .serializers import (
     TicketHistorySerializer,
     TicketSerializer,
     TicketUpdateSerializer,
+    KnowledgeCategorySerializer,
+    KnowledgeArticleSerializer,
+    FAQSerializer,
 )
 
 import logging
@@ -416,7 +423,7 @@ class TicketUpdateView(APIView):
                 and ticket.status not in [
                         Ticket.Status.RESOLVED,
                         Ticket.Status.CLOSED
-                        ]
+                    ]
             ):
 
                 sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
@@ -646,6 +653,246 @@ class FirstResponseView(APIView):
                 "first_response_at": sla.first_response_at,
                 "response_deadline": sla.response_deadline,
                 "response_status": sla.response_status
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class KnowledgeCategoryListCreateView(generics.ListCreateAPIView):
+
+    serializer_class = KnowledgeCategorySerializer
+
+    queryset = KnowledgeCategory.objects.all()
+
+    def get_permissions(self):
+
+        if self.request.method == "POST":
+            return [IsAgentOrAbove()]
+
+        return [IsAuthenticated()]
+
+
+class KnowledgeArticleListCreateView(generics.ListCreateAPIView):
+
+    serializer_class = KnowledgeArticleSerializer
+
+    def get_queryset(self):
+
+        user = self.request.user
+        profile = getattr(user, "profile", None)
+
+        if profile and profile.role in {
+            UserProfile.Role.AGENT,
+            UserProfile.Role.ADMIN,
+        }:
+            return KnowledgeArticle.objects.select_related(
+                "category", "author"
+            ).all()
+
+        return KnowledgeArticle.objects.select_related(
+            "category", "author"
+        ).filter(
+            status=KnowledgeArticle.Status.PUBLISHED
+        )
+
+    def get_permissions(self):
+
+        if self.request.method == "POST":
+            return [IsAgentOrAbove()]
+
+        return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+
+class FAQListCreateView(generics.ListCreateAPIView):
+
+    serializer_class = FAQSerializer
+
+    def get_queryset(self):
+
+        user = self.request.user
+        profile = getattr(user, "profile", None)
+
+        if profile and profile.role in {
+            UserProfile.Role.AGENT,
+            UserProfile.Role.ADMIN,
+        }:
+            return FAQ.objects.select_related(
+                "category", "author"
+            ).all()
+
+        return FAQ.objects.select_related(
+            "category", "author"
+        ).filter(
+            status=FAQ.Status.PUBLISHED
+        )
+
+    def get_permissions(self):
+
+        if self.request.method == "POST":
+            return [IsAgentOrAbove()]
+
+        return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+
+class KnowledgeCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+
+    serializer_class = KnowledgeCategorySerializer
+    queryset = KnowledgeCategory.objects.all()
+
+    def get_permissions(self):
+
+        if self.request.method in ["PUT", "PATCH"]:
+            return [IsAgentOrAbove()]
+
+        if self.request.method == "DELETE":
+            return [IsApplicationAdmin()]
+
+        return [IsAuthenticated()]
+
+
+class KnowledgeArticleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    def retrieve(self, request, *args, **kwargs):
+        article = self.get_object()
+
+        article.views_count += 1
+        article.save(update_fields=["views_count"])
+
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
+    serializer_class = KnowledgeArticleSerializer
+
+    def get_queryset(self):
+
+        user = self.request.user
+        profile = getattr(user, "profile", None)
+
+        queryset = KnowledgeArticle.objects.select_related(
+            "category", "author"
+        )
+
+        if profile and profile.role in {
+            UserProfile.Role.AGENT,
+            UserProfile.Role.ADMIN,
+        }:
+            return queryset
+
+        return queryset.filter(
+            status=KnowledgeArticle.Status.PUBLISHED
+        )
+
+    def get_permissions(self):
+
+        if self.request.method in ["PUT", "PATCH"]:
+            return [IsAgentOrAbove()]
+
+        if self.request.method == "DELETE":
+            return [IsApplicationAdmin()]
+
+        return [IsAuthenticated()]
+
+
+class FAQDetailView(generics.RetrieveUpdateDestroyAPIView):
+    def retrieve(self, request, *args, **kwargs):
+        faq = self.get_object()
+
+        faq.views_count += 1
+        faq.save(update_fields=["views_count"])
+
+        serializer = self.get_serializer(faq)
+        return Response(serializer.data)
+
+    serializer_class = FAQSerializer
+
+    def get_queryset(self):
+
+        user = self.request.user
+        profile = getattr(user, "profile", None)
+
+        queryset = FAQ.objects.select_related(
+            "category", "author"
+        )
+
+        if profile and profile.role in {
+            UserProfile.Role.AGENT,
+            UserProfile.Role.ADMIN,
+        }:
+            return queryset
+
+        return queryset.filter(
+            status=FAQ.Status.PUBLISHED
+        )
+
+    def get_permissions(self):
+
+        if self.request.method in ["PUT", "PATCH"]:
+            return [IsAgentOrAbove()]
+
+        if self.request.method == "DELETE":
+            return [IsApplicationAdmin()]
+
+        return [IsAuthenticated()]
+
+
+class KnowledgeArticlePublishView(generics.GenericAPIView):
+
+    queryset = KnowledgeArticle.objects.all()
+    serializer_class = KnowledgeArticleSerializer
+    permission_classes = [IsApplicationAdmin]
+
+    def post(self, request, *args, **kwargs):
+
+        article = self.get_object()
+
+        if article.status == KnowledgeArticle.Status.PUBLISHED:
+            return Response(
+                {"message": "Article is already published."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        article.status = KnowledgeArticle.Status.PUBLISHED
+        article.published_at = timezone.now()
+        article.save(update_fields=["status", "published_at", "updated_at"])
+
+        return Response(
+            {
+                "message": "Article published successfully.",
+                "article": self.get_serializer(article).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class FAQPublishView(generics.GenericAPIView):
+
+    queryset = FAQ.objects.all()
+    serializer_class = FAQSerializer
+    permission_classes = [IsApplicationAdmin]
+
+    def post(self, request, *args, **kwargs):
+
+        faq = self.get_object()
+
+        if faq.status == FAQ.Status.PUBLISHED:
+            return Response(
+                {"message": "FAQ is already published."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        faq.status = FAQ.Status.PUBLISHED
+        faq.published_at = timezone.now()
+        faq.save(update_fields=["status", "published_at", "updated_at"])
+
+        return Response(
+            {
+                "message": "FAQ published successfully.",
+                "faq": self.get_serializer(faq).data
             },
             status=status.HTTP_200_OK
         )

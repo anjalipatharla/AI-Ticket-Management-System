@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-from .models import Complaint, Ticket, TicketHistory
+from .models import Complaint, Ticket, TicketHistory, KnowledgeCategory, KnowledgeArticle, FAQ
 from accounts.models import UserProfile
 from django.contrib.auth.models import User
 
@@ -131,4 +131,150 @@ class TicketHistorySerializer(serializers.ModelSerializer):
             "new_value",
             "comment",
             "created_at",
+        ]
+
+
+class KnowledgeCategorySerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = KnowledgeCategory
+
+        fields = [
+            "id",
+            "name",
+            "description",
+            "created_at",
+            "updated_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class KnowledgeArticleSerializer(serializers.ModelSerializer):
+
+    category_name = serializers.CharField(
+        source="category.name",
+        read_only=True
+    )
+
+    author_username = serializers.CharField(
+        source="author.username",
+        read_only=True
+    )
+
+    class Meta:
+        model = KnowledgeArticle
+
+        fields = [
+            "id",
+            "title",
+            "content",
+            "category",
+            "category_name",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
+        ]
+
+
+class FAQSerializer(serializers.ModelSerializer):
+
+    category_name = serializers.CharField(
+        source="category.name",
+        read_only=True
+    )
+
+    author_username = serializers.CharField(
+        source="author.username",
+        read_only=True
+    )
+
+    class Meta:
+        model = FAQ
+
+        fields = [
+            "id",
+            "question",
+            "answer",
+            "category",
+            "category_name",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
+        ]
+
+
+class FAQSerializer(serializers.ModelSerializer):
+
+    category_name = serializers.CharField(
+        source="category.name",
+        read_only=True
+    )
+
+    author_username = serializers.CharField(
+        source="author.username",
+        read_only=True
+    )
+
+    class Meta:
+        model = FAQ
+
+        fields = [
+            "id",
+            "question",
+            "answer",
+            "category",
+            "category_name",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "author",
+            "author_username",
+            "status",
+            "views_count",
+            "created_at",
+            "updated_at",
+            "published_at",
         ]
