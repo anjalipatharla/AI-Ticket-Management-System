@@ -370,3 +370,122 @@ class TicketEscalation(models.Model):
 
     def __str__(self):
         return f"{self.ticket.ticket_number} - {self.level}"
+
+
+class KnowledgeCategory(models.Model):
+
+    name = models.CharField(
+        max_length=100,
+        unique=True
+    )
+
+    description = models.TextField(
+        blank=True
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name_plural = "Knowledge Categories"
+
+    def __str__(self):
+        return self.name
+
+
+class KnowledgeArticle(models.Model):
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        PUBLISHED = "PUBLISHED", "Published"
+
+    title = models.CharField(max_length=200)
+
+    content = models.TextField()
+
+    category = models.ForeignKey(
+        KnowledgeCategory,
+        on_delete=models.PROTECT,
+        related_name="articles"
+    )
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="knowledge_articles"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+
+    views_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title
+
+
+class FAQ(models.Model):
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        PUBLISHED = "PUBLISHED", "Published"
+
+    question = models.CharField(max_length=300)
+
+    answer = models.TextField()
+
+    category = models.ForeignKey(
+        KnowledgeCategory,
+        on_delete=models.PROTECT,
+        related_name="faqs"
+    )
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="created_faqs"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+
+    views_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "FAQ"
+        verbose_name_plural = "FAQs"
+
+    def __str__(self):
+        return self.question

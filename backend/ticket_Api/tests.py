@@ -7,8 +7,18 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
-from .models import Complaint, Ticket, TicketHistory, TicketSLA, SLAPolicy, TicketEscalation
 from .sla_monitor import process_sla_monitoring
+from .models import (
+    Complaint,
+    Ticket,
+    TicketHistory,
+    TicketSLA,
+    SLAPolicy,
+    TicketEscalation,
+    KnowledgeCategory,
+    KnowledgeArticle,
+    FAQ,
+)
 
 
 class ComplaintAndTicketAPITests(APITestCase):
@@ -1429,3 +1439,1041 @@ class ComplaintAndTicketAPITests(APITestCase):
         # Verify transaction rollback
         self.assertEqual(ticket.priority, original_priority)
         self.assertEqual(sla.policy, original_policy)
+
+        # 41. Agent and Admin can create Knowledge Categories
+
+    def test_agent_and_admin_can_create_knowledge_category(self):
+
+        agent = self.create_user(
+            "knowledge_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "knowledge_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.post(
+                "/api/knowledge/categories/",
+                {
+                    "name": f"Category {user.username}",
+                    "description": "Knowledge Base category"
+                },
+                format="json"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_201_CREATED
+            )
+
+        self.assertEqual(KnowledgeCategory.objects.count(), 2)
+        # 42. Customer cannot create Knowledge Categories
+
+    def test_customer_cannot_create_knowledge_category(self):
+
+        customer = self.create_user(
+            "knowledge_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            "/api/knowledge/categories/",
+            {
+                "name": "Customer Category",
+                "description": "Should not be created"
+            },
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(KnowledgeCategory.objects.count(), 0)
+
+        # 43. Agent and Admin can create Knowledge Articles
+
+    def test_agent_and_admin_can_create_knowledge_article(self):
+
+        agent = self.create_user(
+            "article_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Technical Support",
+            description="Technical troubleshooting articles"
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.post(
+                "/api/knowledge/articles/",
+                {
+                    "title": f"Article by {user.username}",
+                    "content": "Steps to troubleshoot a technical issue.",
+                    "category": category.id
+                },
+                format="json"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_201_CREATED
+            )
+
+            article = KnowledgeArticle.objects.get(
+                title=f"Article by {user.username}"
+            )
+
+            self.assertEqual(article.author, user)
+            self.assertEqual(
+                article.status,
+                KnowledgeArticle.Status.DRAFT
+            )
+
+        self.assertEqual(KnowledgeArticle.objects.count(), 2)
+        # 44. Customer cannot create Knowledge Articles
+
+    def test_customer_cannot_create_knowledge_article(self):
+
+        customer = self.create_user(
+            "article_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Customer Help",
+            description="Customer help articles"
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            "/api/knowledge/articles/",
+            {
+                "title": "Customer Article",
+                "content": "This should not be created.",
+                "category": category.id
+            },
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(KnowledgeArticle.objects.count(), 0)
+        # 45. Customers can see only published Knowledge Articles
+
+    def test_customer_sees_only_published_knowledge_articles(self):
+
+        customer = self.create_user(
+            "article_view_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="General Help",
+            description="General help articles"
+        )
+
+        agent = self.create_user(
+            "article_view_agent",
+            UserProfile.Role.AGENT
+        )
+
+        KnowledgeArticle.objects.create(
+            title="Published Article",
+            content="This article is available to customers.",
+            category=category,
+            author=agent,
+            status=KnowledgeArticle.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        KnowledgeArticle.objects.create(
+            title="Draft Article",
+            content="This article is not yet published.",
+            category=category,
+            author=agent,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.get("/api/knowledge/articles/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        titles = [article["title"] for article in response.data]
+
+        self.assertIn("Published Article", titles)
+        self.assertNotIn("Draft Article", titles)
+        self.assertEqual(len(titles), 1)
+        # 46. Agents and Admins can see all Knowledge Articles
+
+    def test_agent_and_admin_see_all_knowledge_articles(self):
+
+        agent = self.create_user(
+            "article_all_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_all_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Account Help",
+            description="Account-related articles"
+        )
+
+        KnowledgeArticle.objects.create(
+            title="Published Account Article",
+            content="Published content.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        KnowledgeArticle.objects.create(
+            title="Draft Account Article",
+            content="Draft content.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get("/api/knowledge/articles/")
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+            titles = [article["title"] for article in response.data]
+
+            self.assertIn("Published Account Article", titles)
+            self.assertIn("Draft Account Article", titles)
+            self.assertEqual(len(titles), 2)
+        # 47. Customer cannot access a Draft Knowledge Article
+
+    def test_customer_cannot_access_draft_knowledge_article(self):
+
+        customer = self.create_user(
+            "article_draft_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "article_draft_agent",
+            UserProfile.Role.AGENT
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Private Help",
+            description="Unpublished help articles"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Private Draft Article",
+            content="This content must remain private.",
+            category=category,
+            author=agent,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.get(
+            f"/api/knowledge/articles/{article.id}/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND
+        )
+        # 48. Agents and Admins can access Draft Knowledge Articles
+
+    def test_agent_and_admin_can_access_draft_knowledge_article(self):
+
+        agent = self.create_user(
+            "article_detail_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_detail_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Internal Support",
+            description="Internal support articles"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Internal Draft Article",
+            content="Draft content for support staff.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get(
+                f"/api/knowledge/articles/{article.id}/"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_200_OK
+            )
+
+            self.assertEqual(
+                response.data["title"],
+                "Internal Draft Article"
+            )
+        # 49. Agent and Admin can edit Knowledge Articles
+
+    def test_agent_and_admin_can_edit_knowledge_article(self):
+
+        agent = self.create_user(
+            "article_edit_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_edit_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Editing Help",
+            description="Article editing tests"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Original Article",
+            content="Original content.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.patch(
+                f"/api/knowledge/articles/{article.id}/",
+                {
+                    "title": f"Updated by {user.username}"
+                },
+                format="json"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_200_OK
+            )
+
+            article.refresh_from_db()
+
+            self.assertEqual(
+                article.title,
+                f"Updated by {user.username}"
+            )
+        # 50. Customer cannot edit Knowledge Articles
+
+    def test_customer_cannot_edit_knowledge_article(self):
+
+        customer = self.create_user(
+            "article_edit_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "article_edit_owner",
+            UserProfile.Role.AGENT
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Customer Editing",
+            description="Customer editing permission test"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Original Article",
+            content="Original content.",
+            category=category,
+            author=agent,
+            status=KnowledgeArticle.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.patch(
+            f"/api/knowledge/articles/{article.id}/",
+            {"title": "Customer Modified Article"},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        article.refresh_from_db()
+
+        self.assertEqual(article.title, "Original Article")
+        # 51. Only Admin can delete Knowledge Articles
+
+    def test_only_admin_can_delete_knowledge_article(self):
+
+        agent = self.create_user(
+            "article_delete_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_delete_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Deletion Help",
+            description="Article deletion tests"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Article to Delete",
+            content="Testing deletion permissions.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        # Agent attempts to delete
+        self.client.force_authenticate(user=agent)
+
+        agent_response = self.client.delete(
+            f"/api/knowledge/articles/{article.id}/"
+        )
+
+        self.assertEqual(
+            agent_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertTrue(
+            KnowledgeArticle.objects.filter(id=article.id).exists()
+        )
+
+        # Admin attempts to delete
+        self.client.force_authenticate(user=admin)
+
+        admin_response = self.client.delete(
+            f"/api/knowledge/articles/{article.id}/"
+        )
+
+        self.assertEqual(
+            admin_response.status_code,
+            status.HTTP_204_NO_CONTENT
+        )
+
+        self.assertFalse(
+            KnowledgeArticle.objects.filter(id=article.id).exists()
+        )
+        # 52. Only Admin can publish Knowledge Articles
+
+    def test_only_admin_can_publish_knowledge_article(self):
+
+        agent = self.create_user(
+            "article_publish_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "article_publish_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Publishing Help",
+            description="Article publishing tests"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Article Ready to Publish",
+            content="This article is ready.",
+            category=category,
+            author=agent,
+            status=KnowledgeArticle.Status.DRAFT
+        )
+
+        # Agent attempts to publish
+        self.client.force_authenticate(user=agent)
+
+        agent_response = self.client.post(
+            f"/api/knowledge/articles/{article.id}/publish/"
+        )
+
+        self.assertEqual(
+            agent_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        article.refresh_from_db()
+        self.assertEqual(article.status, KnowledgeArticle.Status.DRAFT)
+
+        # Admin publishes the article
+        self.client.force_authenticate(user=admin)
+
+        admin_response = self.client.post(
+            f"/api/knowledge/articles/{article.id}/publish/"
+        )
+
+        self.assertEqual(
+            admin_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        article.refresh_from_db()
+
+        self.assertEqual(
+            article.status,
+            KnowledgeArticle.Status.PUBLISHED
+        )
+
+        self.assertIsNotNone(article.published_at)
+        # 53. Already published Knowledge Article cannot be published again
+
+    def test_already_published_article_cannot_be_published_again(self):
+
+        admin = self.create_user(
+            "article_duplicate_publish_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Published Help",
+            description="Duplicate publishing test"
+        )
+
+        article = KnowledgeArticle.objects.create(
+            title="Already Published Article",
+            content="This article is already published.",
+            category=category,
+            author=admin,
+            status=KnowledgeArticle.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            f"/api/knowledge/articles/{article.id}/publish/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        self.assertEqual(
+            response.data["message"],
+            "Article is already published."
+        )
+        # 54. Agent and Admin can create FAQs
+
+    def test_agent_and_admin_can_create_faq(self):
+
+        agent = self.create_user(
+            "faq_create_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "faq_create_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Support",
+            description="Frequently asked questions"
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.post(
+                "/api/faqs/",
+                {
+                    "question": f"Question by {user.username}?",
+                    "answer": "This is the answer.",
+                    "category": category.id
+                },
+                format="json"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_201_CREATED
+            )
+
+            faq = FAQ.objects.get(
+                question=f"Question by {user.username}?"
+            )
+
+            self.assertEqual(faq.author, user)
+            self.assertEqual(faq.status, FAQ.Status.DRAFT)
+
+        self.assertEqual(FAQ.objects.count(), 2)
+        # 55. Customer cannot create FAQs
+
+    def test_customer_cannot_create_faq(self):
+
+        customer = self.create_user(
+            "faq_create_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Customer FAQ",
+            description="Customer FAQ permission test"
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            "/api/faqs/",
+            {
+                "question": "Can I create an FAQ?",
+                "answer": "This should not be saved.",
+                "category": category.id
+            },
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(FAQ.objects.count(), 0)
+        # 56. Customers can see only published FAQs
+
+    def test_customer_sees_only_published_faqs(self):
+
+        customer = self.create_user(
+            "faq_view_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "faq_view_agent",
+            UserProfile.Role.AGENT
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Visibility",
+            description="FAQ visibility tests"
+        )
+
+        FAQ.objects.create(
+            question="How do I reset my password?",
+            answer="Use the password reset option.",
+            category=category,
+            author=agent,
+            status=FAQ.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        FAQ.objects.create(
+            question="How do I change my account email?",
+            answer="This answer is still being prepared.",
+            category=category,
+            author=agent,
+            status=FAQ.Status.DRAFT
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.get("/api/faqs/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        questions = [faq["question"] for faq in response.data]
+
+        self.assertIn("How do I reset my password?", questions)
+        self.assertNotIn("How do I change my account email?", questions)
+        self.assertEqual(len(questions), 1)
+        # 57. Agents and Admins can see all FAQs
+
+    def test_agent_and_admin_see_all_faqs(self):
+
+        agent = self.create_user(
+            "faq_all_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "faq_all_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Internal",
+            description="Internal FAQ visibility tests"
+        )
+
+        FAQ.objects.create(
+            question="Published FAQ question?",
+            answer="Published answer.",
+            category=category,
+            author=admin,
+            status=FAQ.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        FAQ.objects.create(
+            question="Draft FAQ question?",
+            answer="Draft answer.",
+            category=category,
+            author=admin,
+            status=FAQ.Status.DRAFT
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.get("/api/faqs/")
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_200_OK
+            )
+
+            questions = [faq["question"] for faq in response.data]
+
+            self.assertIn("Published FAQ question?", questions)
+            self.assertIn("Draft FAQ question?", questions)
+            self.assertEqual(len(questions), 2)
+        # 58. Customer cannot access a Draft FAQ
+
+    def test_customer_cannot_access_draft_faq(self):
+
+        customer = self.create_user(
+            "faq_draft_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "faq_draft_agent",
+            UserProfile.Role.AGENT
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Private",
+            description="Private FAQ tests"
+        )
+
+        faq = FAQ.objects.create(
+            question="Private draft question?",
+            answer="This answer must remain private.",
+            category=category,
+            author=agent,
+            status=FAQ.Status.DRAFT
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.get(
+            f"/api/faqs/{faq.id}/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND
+        )
+        # 59. Agent and Admin can edit FAQs
+
+    def test_agent_and_admin_can_edit_faq(self):
+
+        agent = self.create_user(
+            "faq_edit_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "faq_edit_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Editing",
+            description="FAQ editing tests"
+        )
+
+        faq = FAQ.objects.create(
+            question="Original FAQ question?",
+            answer="Original answer.",
+            category=category,
+            author=admin,
+            status=FAQ.Status.DRAFT
+        )
+
+        for user in [agent, admin]:
+
+            self.client.force_authenticate(user=user)
+
+            response = self.client.patch(
+                f"/api/faqs/{faq.id}/",
+                {
+                    "answer": f"Updated by {user.username}."
+                },
+                format="json"
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_200_OK
+            )
+
+            faq.refresh_from_db()
+
+            self.assertEqual(
+                faq.answer,
+                f"Updated by {user.username}."
+            )
+        # 60. Customer cannot edit FAQs
+
+    def test_customer_cannot_edit_faq(self):
+
+        customer = self.create_user(
+            "faq_edit_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "faq_edit_owner",
+            UserProfile.Role.AGENT
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Customer Editing",
+            description="Customer FAQ editing tests"
+        )
+
+        faq = FAQ.objects.create(
+            question="Original FAQ question?",
+            answer="Original answer.",
+            category=category,
+            author=agent,
+            status=FAQ.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.patch(
+            f"/api/faqs/{faq.id}/",
+            {"answer": "Modified by customer."},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        faq.refresh_from_db()
+
+        self.assertEqual(faq.answer, "Original answer.")
+        # 61. Only Admin can delete FAQs
+
+    def test_only_admin_can_delete_faq(self):
+
+        agent = self.create_user(
+            "faq_delete_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "faq_delete_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Deletion",
+            description="FAQ deletion tests"
+        )
+
+        faq = FAQ.objects.create(
+            question="FAQ to delete?",
+            answer="Testing deletion permissions.",
+            category=category,
+            author=admin,
+            status=FAQ.Status.DRAFT
+        )
+
+        # Agent attempts to delete
+        self.client.force_authenticate(user=agent)
+
+        agent_response = self.client.delete(
+            f"/api/faqs/{faq.id}/"
+        )
+
+        self.assertEqual(
+            agent_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertTrue(
+            FAQ.objects.filter(id=faq.id).exists()
+        )
+
+        # Admin attempts to delete
+        self.client.force_authenticate(user=admin)
+
+        admin_response = self.client.delete(
+            f"/api/faqs/{faq.id}/"
+        )
+
+        self.assertEqual(
+            admin_response.status_code,
+            status.HTTP_204_NO_CONTENT
+        )
+
+        self.assertFalse(
+            FAQ.objects.filter(id=faq.id).exists()
+        )
+        # 62. Only Admin can publish FAQs
+
+    def test_only_admin_can_publish_faq(self):
+
+        agent = self.create_user(
+            "faq_publish_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "faq_publish_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="FAQ Publishing",
+            description="FAQ publishing tests"
+        )
+
+        faq = FAQ.objects.create(
+            question="Ready to publish?",
+            answer="This FAQ is ready.",
+            category=category,
+            author=agent,
+            status=FAQ.Status.DRAFT
+        )
+
+        # Agent attempts to publish
+        self.client.force_authenticate(user=agent)
+
+        agent_response = self.client.post(
+            f"/api/faqs/{faq.id}/publish/"
+        )
+
+        self.assertEqual(
+            agent_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        faq.refresh_from_db()
+
+        self.assertEqual(faq.status, FAQ.Status.DRAFT)
+
+        # Admin publishes the FAQ
+        self.client.force_authenticate(user=admin)
+
+        admin_response = self.client.post(
+            f"/api/faqs/{faq.id}/publish/"
+        )
+
+        self.assertEqual(
+            admin_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        faq.refresh_from_db()
+
+        self.assertEqual(
+            faq.status,
+            FAQ.Status.PUBLISHED
+        )
+
+        self.assertIsNotNone(faq.published_at)
+        # 63. Already published FAQ cannot be published again
+
+    def test_already_published_faq_cannot_be_published_again(self):
+
+        admin = self.create_user(
+            "faq_duplicate_publish_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        category = KnowledgeCategory.objects.create(
+            name="Published FAQ",
+            description="Duplicate FAQ publishing test"
+        )
+
+        faq = FAQ.objects.create(
+            question="Already published question?",
+            answer="This FAQ is already published.",
+            category=category,
+            author=admin,
+            status=FAQ.Status.PUBLISHED,
+            published_at=timezone.now()
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            f"/api/faqs/{faq.id}/publish/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        self.assertEqual(
+            response.data["message"],
+            "FAQ is already published."
+        )
