@@ -8,6 +8,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from .ai_services.complaint_classifier import classify_complaint
+from .ai_services.reply_generator import generate_reply
 
 # Django REST Framework imports
 from rest_framework import generics, status
@@ -35,6 +36,7 @@ from .models import (
     KnowledgeCategory,
     KnowledgeArticle,
     FAQ,
+    TicketMessage,
 )
 
 # Ticket API serializer imports
@@ -47,6 +49,7 @@ from .serializers import (
     KnowledgeCategorySerializer,
     KnowledgeArticleSerializer,
     FAQSerializer,
+    TicketMessageSerializer,
 )
 
 import logging
@@ -321,7 +324,136 @@ def get_accessible_ticket(user, ticket_id):
     raise PermissionDenied("You do not have access to this ticket.")
 
 
+class TicketMessageListCreateView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, ticket_id):
+
+        ticket = get_accessible_ticket(request.user, ticket_id)
+
+        messages = ticket.messages.select_related(
+            "sender",
+            "ticket"
+        ).all()
+
+        serializer = TicketMessageSerializer(
+            messages,
+            many=True
+        )
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request, ticket_id):
+
+        ticket = get_accessible_ticket(request.user, ticket_id)
+
+        serializer = TicketMessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+
+            # Save the actual conversation message
+            message = serializer.save(
+                ticket=ticket,
+                sender=request.user
+            )
+
+            profile = getattr(request.user, "profile", None)
+
+            # Only the assigned Agent's first reply counts
+            if (
+                profile
+                and profile.role == UserProfile.Role.AGENT
+                and ticket.assigned_agent_id == request.user.id
+            ):
+
+                sla = TicketSLA.objects.select_for_update().filter(
+                    ticket=ticket
+                ).first()
+
+                if sla and not sla.first_response_at:
+
+                    first_response_time = timezone.now()
+
+                    sla.first_response_at = first_response_time
+                    sla.last_checked_at = first_response_time
+
+                    if first_response_time <= sla.response_deadline:
+                        sla.response_status = TicketSLA.Status.MET
+                    else:
+                        sla.response_status = TicketSLA.Status.BREACHED
+
+                    sla.save(
+                        update_fields=[
+                            "first_response_at",
+                            "response_status",
+                            "last_checked_at",
+                            "updated_at"
+                        ]
+                    )
+
+                    ticket.history.create(
+                        action=TicketHistory.Action.FIRST_RESPONSE_RECORDED,
+                        changed_by=request.user,
+                        new_value=first_response_time.isoformat(),
+                        comment=(
+                            "First response recorded through ticket messaging. "
+                            f"SLA status: {sla.response_status}."
+                        )
+                    )
+
+        return Response(
+            TicketMessageSerializer(message).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+class AIReplyGenerationView(APIView):
+
+    permission_classes = [IsAgentOrAbove]
+
+    def post(self, request, ticket_id):
+
+        ticket = get_accessible_ticket(
+            request.user,
+            ticket_id
+        )
+
+        messages = ticket.messages.select_related(
+            "sender"
+        ).order_by("created_at", "id")
+
+        try:
+            suggested_reply = generate_reply(
+                ticket,
+                messages
+            )
+
+        except Exception:
+            logger.exception(
+                "AI reply generation failed for ticket %s",
+                ticket.ticket_number
+            )
+
+            return Response(
+                {
+                    "error": "AI reply generation is currently unavailable."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        return Response(
+            {
+                "ticket_number": ticket.ticket_number,
+                "suggested_reply": suggested_reply
+            },
+            status=status.HTTP_200_OK
+        )
+
 # 6. Users view individual ticket details
+
+
 class TicketDetailView(APIView):
 
     permission_classes = [IsAuthenticated]
@@ -423,7 +555,7 @@ class TicketUpdateView(APIView):
                 and ticket.status not in [
                         Ticket.Status.RESOLVED,
                         Ticket.Status.CLOSED
-                    ]
+                ]
             ):
 
                 sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()

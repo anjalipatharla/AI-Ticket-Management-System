@@ -4,6 +4,7 @@ from .models import (
     KnowledgeCategory,
     KnowledgeArticle,
     FAQ,
+    TicketMessage,
 )
 
 
@@ -49,3 +50,23 @@ class FAQAdmin(admin.ModelAdmin):
     list_filter = ("status", "category", "created_at")
     search_fields = ("question", "answer")
     readonly_fields = ("views_count", "created_at", "updated_at")
+
+
+@admin.register(TicketMessage)
+class TicketMessageAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "id",
+        "ticket",
+        "sender",
+        "created_at",
+    )
+
+    search_fields = (
+        "ticket__ticket_number",
+        "sender__username",
+        "message",
+    )
+
+    list_filter = ("created_at",)
+    readonly_fields = ("created_at",)

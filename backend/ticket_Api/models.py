@@ -206,6 +206,27 @@ class TicketHistory(models.Model):
         return f"{self.ticket.ticket_number} - {self.action}"
 
 
+class TicketMessage(models.Model):
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="messages"
+    )
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="ticket_messages"
+    )
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"Message on {self.ticket.ticket_number} by {self.sender.username}"
+
+
 # 4. SLA Policy: Defines service deadlines for each ticket priority
 class SLAPolicy(models.Model):
 

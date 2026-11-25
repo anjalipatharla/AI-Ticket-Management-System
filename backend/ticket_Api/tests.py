@@ -5,6 +5,8 @@ from datetime import timedelta
 
 from rest_framework import status
 from rest_framework.test import APITestCase
+from unittest.mock import patch
+from ticket_Api.ai_services.reply_generator import generate_reply
 
 from accounts.models import UserProfile
 from .sla_monitor import process_sla_monitoring
@@ -18,6 +20,7 @@ from .models import (
     KnowledgeCategory,
     KnowledgeArticle,
     FAQ,
+    TicketMessage,
 )
 
 
@@ -2476,4 +2479,602 @@ class ComplaintAndTicketAPITests(APITestCase):
         self.assertEqual(
             response.data["message"],
             "FAQ is already published."
+        )
+
+    # 64. Customer can send and retrieve messages on their own ticket
+    def test_customer_can_send_and_retrieve_ticket_messages(self):
+
+        customer = self.create_user(
+            "message_customer",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "message_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=customer)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        # Customer sends a message
+        post_response = self.client.post(
+            url,
+            {"message": "I still need help with my payment."},
+            format="json"
+        )
+
+        self.assertEqual(
+            post_response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        self.assertEqual(
+            post_response.data["sender_username"],
+            customer.username
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            1
+        )
+
+        # Customer retrieves the conversation
+        get_response = self.client.get(url)
+
+        self.assertEqual(
+            get_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.assertEqual(len(get_response.data), 1)
+
+        self.assertEqual(
+            get_response.data[0]["message"],
+            "I still need help with my payment."
+        )
+
+    # 65. Customer cannot access another customer's messages
+    def test_customer_cannot_access_other_ticket_messages(self):
+
+        customer1 = self.create_user(
+            "message_customer1",
+            UserProfile.Role.CUSTOMER
+        )
+        customer2 = self.create_user(
+            "message_customer2",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "message_agent2",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer1, agent)
+
+        self.client.force_authenticate(user=customer2)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        get_response = self.client.get(url)
+
+        post_response = self.client.post(
+            url,
+            {"message": "Unauthorized message."},
+            format="json"
+        )
+
+        self.assertEqual(
+            get_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(
+            post_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(TicketMessage.objects.count(), 0)
+
+    # 66. Assigned Agent can reply to a ticket
+    def test_assigned_agent_can_reply_to_ticket(self):
+
+        customer = self.create_user(
+            "message_customer3",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "message_agent3",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/messages/",
+            {"message": "We are investigating your issue."},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        self.assertEqual(
+            response.data["sender_username"],
+            agent.username
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            1
+        )
+
+    # 67. Unassigned Agent cannot access or reply to a ticket
+    def test_unassigned_agent_cannot_access_ticket_messages(self):
+
+        customer = self.create_user(
+            "message_customer4",
+            UserProfile.Role.CUSTOMER
+        )
+        assigned_agent = self.create_user(
+            "message_assigned_agent",
+            UserProfile.Role.AGENT
+        )
+        other_agent = self.create_user(
+            "message_other_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, assigned_agent)
+
+        self.client.force_authenticate(user=other_agent)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        get_response = self.client.get(url)
+
+        post_response = self.client.post(
+            url,
+            {"message": "Unauthorized agent reply."},
+            format="json"
+        )
+
+        self.assertEqual(
+            get_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(
+            post_response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(TicketMessage.objects.count(), 0)
+
+    # 68. Admin can access and send ticket messages
+    def test_admin_can_access_and_send_ticket_messages(self):
+
+        customer = self.create_user(
+            "message_customer5",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "message_agent5",
+            UserProfile.Role.AGENT
+        )
+        admin = self.create_user(
+            "message_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=admin)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        post_response = self.client.post(
+            url,
+            {"message": "Admin is reviewing this ticket."},
+            format="json"
+        )
+
+        self.assertEqual(
+            post_response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        get_response = self.client.get(url)
+
+        self.assertEqual(
+            get_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.assertEqual(len(get_response.data), 1)
+
+        self.assertEqual(
+            get_response.data[0]["sender_username"],
+            admin.username
+        )
+
+    # 69. Agent's first message automatically records SLA first response
+    def test_agent_first_message_records_sla_first_response(self):
+
+        customer = self.create_user(
+            "sla_message_customer",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "sla_message_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        policy, created = SLAPolicy.objects.get_or_create(
+            priority=ticket.priority,
+            defaults={
+                "response_time_minutes": 120,
+                "resolution_time_minutes": 1440
+            }
+        )
+
+        sla = TicketSLA.objects.create(
+            ticket=ticket,
+            policy=policy,
+            response_target_minutes=120,
+            resolution_target_minutes=1440,
+            response_deadline=timezone.now() + timedelta(hours=2),
+            resolution_deadline=timezone.now() + timedelta(hours=24)
+        )
+
+        self.client.force_authenticate(user=agent)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        response = self.client.post(
+            url,
+            {"message": "We are looking into your issue."},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        sla.refresh_from_db()
+
+        self.assertIsNotNone(sla.first_response_at)
+
+        self.assertEqual(
+            sla.response_status,
+            TicketSLA.Status.MET
+        )
+
+        self.assertEqual(
+            ticket.history.filter(
+                action=TicketHistory.Action.FIRST_RESPONSE_RECORDED
+            ).count(),
+            1
+        )
+
+    # 70. Subsequent agent messages do not overwrite first response
+    def test_subsequent_agent_messages_do_not_overwrite_first_response(self):
+
+        customer = self.create_user(
+            "repeat_message_customer",
+            UserProfile.Role.CUSTOMER
+        )
+        agent = self.create_user(
+            "repeat_message_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        policy, created = SLAPolicy.objects.get_or_create(
+            priority=ticket.priority,
+            defaults={
+                "response_time_minutes": 120,
+                "resolution_time_minutes": 1440
+            }
+        )
+
+        sla = TicketSLA.objects.create(
+            ticket=ticket,
+            policy=policy,
+            response_target_minutes=120,
+            resolution_target_minutes=1440,
+            response_deadline=timezone.now() + timedelta(hours=2),
+            resolution_deadline=timezone.now() + timedelta(hours=24)
+        )
+
+        self.client.force_authenticate(user=agent)
+
+        url = f"/api/tickets/{ticket.id}/messages/"
+
+        # First agent reply
+        first_response = self.client.post(
+            url,
+            {"message": "We are checking your issue."},
+            format="json"
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        sla.refresh_from_db()
+        original_first_response = sla.first_response_at
+
+        # Second agent reply
+        second_response = self.client.post(
+            url,
+            {"message": "We have an update for you."},
+            format="json"
+        )
+
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        sla.refresh_from_db()
+
+        self.assertEqual(
+            sla.first_response_at,
+            original_first_response
+        )
+
+        self.assertEqual(
+            ticket.history.filter(
+                action=TicketHistory.Action.FIRST_RESPONSE_RECORDED
+            ).count(),
+            1
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            2
+        )
+
+    @patch(
+        "ticket_Api.views.generate_reply",
+        return_value="We are checking your payment issue. We will update you shortly."
+    )
+    def test_assigned_agent_can_generate_ai_reply(self, mock_generate_reply):
+
+        customer = self.create_user(
+            "ai_reply_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "ai_reply_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/ai-reply/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            response.data["suggested_reply"],
+            "We are checking your payment issue. We will update you shortly."
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+        mock_generate_reply.assert_called_once()
+
+    def test_customer_cannot_generate_ai_reply(self):
+
+        customer = self.create_user(
+            "ai_reply_customer_denied",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "ai_reply_assigned_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/ai-reply/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+    def test_unassigned_agent_cannot_generate_ai_reply(self):
+
+        customer = self.create_user(
+            "ai_reply_customer_unassigned",
+            UserProfile.Role.CUSTOMER
+        )
+
+        assigned_agent = self.create_user(
+            "ai_reply_assigned",
+            UserProfile.Role.AGENT
+        )
+
+        another_agent = self.create_user(
+            "ai_reply_unassigned",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, assigned_agent)
+
+        self.client.force_authenticate(user=another_agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/ai-reply/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+    @patch(
+        "ticket_Api.views.generate_reply",
+        return_value="Our support team is reviewing your issue."
+    )
+    def test_admin_can_generate_ai_reply(self, mock_generate_reply):
+
+        customer = self.create_user(
+            "ai_reply_admin_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "ai_reply_admin_agent",
+            UserProfile.Role.AGENT
+        )
+
+        admin = self.create_user(
+            "ai_reply_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/ai-reply/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            response.data["suggested_reply"],
+            "Our support team is reviewing your issue."
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+        mock_generate_reply.assert_called_once()
+
+    @patch(
+        "ticket_Api.views.generate_reply",
+        side_effect=Exception("Gemini API unavailable")
+    )
+    def test_ai_reply_returns_service_unavailable_when_gemini_fails(
+        self,
+        mock_generate_reply
+    ):
+
+        customer = self.create_user(
+            "ai_error_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "ai_error_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        self.client.force_authenticate(user=agent)
+
+        response = self.client.post(
+            f"/api/tickets/{ticket.id}/ai-reply/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
+        self.assertEqual(
+            response.data["error"],
+            "AI reply generation is currently unavailable."
+        )
+
+        self.assertEqual(
+            TicketMessage.objects.filter(ticket=ticket).count(),
+            0
+        )
+
+    @patch("ticket_Api.ai_services.reply_generator.get_gemini_client")
+    def test_ai_reply_uses_only_latest_30_messages(self, mock_get_client):
+
+        customer = self.create_user(
+            "history_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        agent = self.create_user(
+            "history_agent",
+            UserProfile.Role.AGENT
+        )
+
+        ticket = self.create_ticket(customer, agent)
+
+        for i in range(35):
+            TicketMessage.objects.create(
+                ticket=ticket,
+                sender=customer,
+                message=f"Customer message {i + 1}"
+            )
+
+        mock_interaction = mock_get_client.return_value.interactions.create
+        mock_interaction.return_value.output_text = "Suggested reply"
+
+        messages = ticket.messages.select_related("sender").order_by(
+            "created_at", "id"
+        )
+
+        result = generate_reply(ticket, messages)
+
+        prompt = mock_interaction.call_args.kwargs["input"]
+
+        self.assertEqual(result, "Suggested reply")
+
+        self.assertNotIn("Customer message 5", prompt)
+        self.assertIn("Customer message 6", prompt)
+        self.assertIn("Customer message 35", prompt)
+
+        self.assertEqual(
+            prompt.count("Customer message"),
+            30
         )

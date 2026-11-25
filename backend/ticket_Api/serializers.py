@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-from .models import Complaint, Ticket, TicketHistory, KnowledgeCategory, KnowledgeArticle, FAQ
+from .models import Complaint, Ticket, TicketHistory, KnowledgeCategory, KnowledgeArticle, FAQ, TicketMessage
 from accounts.models import UserProfile
 from django.contrib.auth.models import User
 
@@ -238,43 +238,36 @@ class FAQSerializer(serializers.ModelSerializer):
         ]
 
 
-class FAQSerializer(serializers.ModelSerializer):
+class TicketMessageSerializer(serializers.ModelSerializer):
 
-    category_name = serializers.CharField(
-        source="category.name",
+    ticket_number = serializers.CharField(
+        source="ticket.ticket_number",
         read_only=True
     )
 
-    author_username = serializers.CharField(
-        source="author.username",
+    sender_username = serializers.CharField(
+        source="sender.username",
         read_only=True
     )
 
     class Meta:
-        model = FAQ
+        model = TicketMessage
 
         fields = [
             "id",
-            "question",
-            "answer",
-            "category",
-            "category_name",
-            "author",
-            "author_username",
-            "status",
-            "views_count",
+            "ticket",
+            "ticket_number",
+            "sender",
+            "sender_username",
+            "message",
             "created_at",
-            "updated_at",
-            "published_at",
         ]
 
         read_only_fields = [
             "id",
-            "author",
-            "author_username",
-            "status",
-            "views_count",
+            "ticket",
+            "ticket_number",
+            "sender",
+            "sender_username",
             "created_at",
-            "updated_at",
-            "published_at",
         ]

@@ -19,6 +19,8 @@ from .views import (
     FAQDetailView,
     KnowledgeArticlePublishView,
     FAQPublishView,
+    TicketMessageListCreateView,
+    AIReplyGenerationView,
 )
 
 urlpatterns = [
@@ -42,17 +44,18 @@ urlpatterns = [
          TicketAssignmentView.as_view(), name="ticket-assign"),
     path("tickets/<int:ticket_id>/history/",
          TicketHistoryView.as_view(), name="ticket-history"),
+    # Ticket Communication API
+    path("tickets/<int:ticket_id>/messages/",
+         TicketMessageListCreateView.as_view(), name="ticket-messages"),
     # SLA APIs
     path("tickets/<int:ticket_id>/first-response/",
          FirstResponseView.as_view(), name="ticket-first-response"),
     # Knowledge Base - Category APIs
-    path("knowledge/categories/",
-         KnowledgeCategoryListCreateView.as_view(),
+    path("knowledge/categories/", KnowledgeCategoryListCreateView.as_view(),
          name="knowledge-category-list-create"),
 
     path("knowledge/categories/<int:pk>/",
-         KnowledgeCategoryDetailView.as_view(),
-         name="knowledge-category-detail"),
+         KnowledgeCategoryDetailView.as_view(), name="knowledge-category-detail"),
 
     # Knowledge Base - Article APIs
     path("knowledge/articles/",
@@ -79,4 +82,6 @@ urlpatterns = [
     path("faqs/<int:pk>/publish/",
          FAQPublishView.as_view(),
          name="faq-publish"),
+    path("tickets/<int:ticket_id>/ai-reply/",
+         AIReplyGenerationView.as_view(), name="ticket-ai-reply"),
 ]
