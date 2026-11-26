@@ -1,123 +1,221 @@
 # AI Ticket Management System
 
-A Django REST Framework backend for an AI-powered ticket management and customer support platform.
+A role-based customer support and ticket management backend built with Django REST Framework and MySQL, with Google Gemini integration for complaint classification and agent-assist reply suggestions.
 
-## Current Backend Scope
+The system is designed around a complete support workflow: customers submit complaints, support agents review and convert them into tickets, ticket ownership and access are controlled by application roles, SLA deadlines are monitored, escalations are recorded, and customers and agents communicate through ticket conversations.
 
-The backend is built using Django REST Framework and MySQL.
+> **Project status:** Backend authentication, complaint/ticket workflows, AI complaint classification, SLA monitoring and escalation, Knowledge Base/FAQ, ticket messaging, and AI reply suggestions are implemented. React frontend, email notification workflows, analytics/reporting, and deployment remain planned work.
 
-### Implemented Features
+## Table of Contents
 
-- Email/password customer registration and JWT authentication.
-- Username-or-email/password login.
-- JWT access and refresh token management.
-- Refresh-token logout with blacklist.
-- Authenticated user profile retrieval and updates.
-- Password reset by email.
+- [Features](#features)
+- [Technology Stack](#technology-stack)
+- [Architecture and Project Structure](#architecture-and-project-structure)
+- [Setup](#setup)
+- [Environment Variables](#environment-variables)
+- [Run the Backend](#run-the-backend)
+- [Application Roles and Access Control](#application-roles-and-access-control)
+- [Implemented API Endpoints](#implemented-api-endpoints)
+- [AI Integration and Reliability](#ai-integration-and-reliability)
+- [SLA Monitoring and Escalation](#sla-monitoring-and-escalation)
+- [Knowledge Base and FAQs](#knowledge-base-and-faqs)
+- [Testing](#testing)
+- [Security Notes and Limitations](#security-notes-and-limitations)
+- [Roadmap](#roadmap)
+
+## Features
+
+### Authentication and User Management
+
+- Customer registration using email/password.
+- Login using username or email and password.
+- JWT access and refresh token authentication.
+- Refresh-token logout using token blacklisting.
+- Authenticated profile retrieval and updates.
+- Password reset flow by email.
 - Google OAuth ID-token login.
 - Authenticated Google account linking.
-- Role-based access control for Customer, Support Agent and Application Admin.
-- Customer complaint submission and tracking.
-- Agent access to pending customer complaints.
-- Agent-only complaint-to-ticket conversion.
-- AI-powered complaint classification using Gemini.
-- Automatic category-based ticket number generation.
-- Role-based ticket visibility and assignment.
-- SLA policies and deadline monitoring.
-- Multi-level ticket escalation.
-- Knowledge Base and FAQ management.
-- Customer-agent ticket messaging.
-- AI-powered reply suggestions for support agents.
-- Ticket history and audit-related tracking.
+- Separate application roles for customers, support agents, and application administrators.
+- Protected role-management endpoint; users cannot change their own role.
 
-### Planned Features
+### Complaint Management
 
-- Email notifications and advanced notification workflows.
-- Analytics and reporting.
-- React frontend development.
-- Final integration testing and deployment.
+- Customers can submit and track their own complaints.
+- Complaint records retain the AI-suggested category, priority, sentiment, and summary.
+- Agents and administrators can review pending complaints.
+- A support agent can convert a complaint into a ticket.
+- A complaint can be converted only once.
+- If Gemini classification is unavailable, complaint submission continues with documented fallback values rather than failing solely because the AI service is unavailable.
+
+### Ticket Management
+
+- Category-based ticket numbers with year and unique database ID.
+- Ticket priorities: LOW, MEDIUM, HIGH, CRITICAL.
+- Ticket statuses: OPEN, IN_PROGRESS, RESOLVED, CLOSED.
+- Ticket listing, detail retrieval, status/priority updates, and assignment.
+- Customers can access only their own tickets.
+- Agents can access tickets assigned to them.
+- Application administrators can access all tickets.
+- Ticket history records creation, assignment, status/priority changes, first response, and escalation events.
+
+### SLA and Escalation Management
+
+- Configurable SLA policies by ticket priority.
+- Response and resolution targets and deadlines.
+- First-response tracking.
+- Response and resolution SLA states: PENDING, MET, BREACHED.
+- Response/resolution deadline recalculation when relevant ticket conditions change.
+- Resolution SLA handling when a ticket is reopened.
+- Multi-level escalation records (Level 1, Level 2, Level 3).
+- Escalation reasons include response breach, resolution breach, and manual escalation.
+- A Django management command monitors deadlines and creates escalation records.
+
+### Knowledge Base and FAQ
+
+- Knowledge categories.
+- Knowledge articles with DRAFT and PUBLISHED states.
+- FAQ records with DRAFT and PUBLISHED states.
+- Publish workflows for articles and FAQs.
+- View-count tracking.
+- Customers see published knowledge content; support staff and administrators have broader management access.
+
+### Ticket Messaging
+
+- Customers and authorized support staff can exchange messages within a ticket.
+- Messages are stored and returned chronologically.
+- Ticket access is checked before a user can read or send messages.
+- An assigned agent's first response can update the ticket's response SLA and ticket history when an SLA record exists.
+
+### Gemini AI Reply Suggestions
+
+- Support agents and administrators can request a suggested reply based on ticket details and recent conversation history.
+- The latest 30 messages are used as conversation context.
+- Prompt instructions prioritize the latest customer concern and discourage invented facts, unsupported claims, and unconfirmed promises.
+- Prompt-injection resistance instructions treat ticket and conversation content as untrusted input.
+- Empty AI responses are rejected.
+- AI service errors are logged and returned as HTTP 503 by the reply-generation endpoint.
+- AI drafts are private, transient suggestions: they are not automatically stored as messages or sent to customers. The support agent must review, edit, and send an approved reply using the normal messaging endpoint.
 
 ## Technology Stack
 
-- **Backend:** Python, Django, Django REST Framework
-- **Database:** MySQL
-- **Authentication:** JWT, Google OAuth
-- **AI Integration:** Google Gemini API
-- **API Testing:** Postman
-- **Version Control:** Git and GitHub
+| Area | Technology |
+| --- | --- |
+| Language | Python |
+| Backend framework | Django 5.2 |
+| API framework | Django REST Framework |
+| Database | MySQL |
+| Authentication | JSON Web Tokens (Simple JWT) |
+| Social login | Google OAuth ID-token verification |
+| AI integration | Google Gemini API using the Google Gen AI SDK |
+| Configuration | python-decouple / environment variables |
+| API verification | Postman |
+| Version control | Git and GitHub |
 
-## Requirements
+## Architecture and Project Structure
 
-- Python 3.12+
-- MySQL Server
-- Google OAuth Web Client ID
-- Gemini API key
+The repository is organized with the Django backend inside `backend/`.
 
-The project has been developed and tested with Python 3.14.
+```text
+AI-Ticket-Management-System/
+├── README.md
+└── backend/
+    ├── manage.py
+    ├── requirements.txt
+    ├── .env.example
+    ├── accounts/
+    │   ├── models.py
+    │   ├── permissions.py
+    │   ├── serializers.py
+    │   ├── urls.py
+    │   └── views.py
+    └── ticket_Api/
+        ├── ai_services/
+        │   ├── complaint_classifier.py
+        │   └── reply_generator.py
+        ├── management/
+        │   └── commands/
+        │       └── run_sla_monitor.py
+        ├── migrations/
+        ├── models.py
+        ├── serializers.py
+        ├── urls.py
+        └── views.py
+```
 
-## Installation
+## Setup
 
-Clone the repository:
+### Prerequisites
+
+- Python 3.12 or later (the project has been developed and tested with Python 3.14).
+- MySQL Server.
+- Git.
+- A Google OAuth Web Client ID for Google sign-in/linking.
+- A Google Gemini API key for AI classification and reply suggestions.
+
+### 1. Clone the repository
 
 ```powershell
 git clone https://github.com/anjalipatharla/AI-Ticket-Management-System.git
-```
-
-Navigate to the backend directory:
-
-```powershell
 cd AI-Ticket-Management-System/backend
 ```
 
-Create and activate a virtual environment:
+### 2. Create and activate a virtual environment
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+### 3. Install dependencies
 
 ```powershell
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Environment Configuration
+## Environment Variables
 
-Copy `backend/.env.example` to `backend/.env` and configure your local environment variables.
+Copy the example configuration file:
 
-Required database settings:
+```powershell
+Copy-Item .env.example .env
+```
 
-- `DB_NAME`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_HOST`
-- `DB_PORT`
+Create the MySQL database and update the values in `.env`.
 
-Other configuration:
+| Variable | Purpose |
+| --- | --- |
+| `SECRET_KEY` | Private Django secret key |
+| `DEBUG` | Django debug setting; use `False` in production |
+| `ALLOWED_HOSTS` | Comma-separated allowed host names |
+| `DB_NAME` | MySQL database name |
+| `DB_USER` | MySQL username |
+| `DB_PASSWORD` | MySQL password |
+| `DB_HOST` | MySQL host |
+| `DB_PORT` | MySQL port |
+| `GOOGLE_CLIENT_ID` | Google OAuth Web Client ID |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `EMAIL_BACKEND` | Django email backend |
+| `DEFAULT_FROM_EMAIL` | Sender address for outgoing email |
+| `EMAIL_HOST`, `EMAIL_PORT` | SMTP server configuration, if SMTP is used |
+| `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | SMTP credentials, if SMTP is used |
+| `EMAIL_USE_TLS` | Whether SMTP uses TLS |
 
-- `SECRET_KEY` — a unique, private Django secret.
-- `GOOGLE_CLIENT_ID` — Google OAuth Web Client ID.
-- `GEMINI_API_KEY` — Google Gemini API key.
+For local development, the example configuration uses Django's console email backend. Password-reset email content is printed in the terminal running the Django server. Configure a real SMTP provider before using email workflows in a deployed environment.
 
-Configure the email settings according to your environment.
+**Never commit the real `.env` file, API keys, database passwords, or other credentials.**
 
-The default email backend is Django's console backend for local development. Password-reset emails are printed in the Django server terminal.
+## Run the Backend
 
-**Security:** Never commit `.env` files, API keys, passwords or other credentials to GitHub.
+Run these commands from the `backend/` directory after configuring MySQL and `.env`.
 
-## Database Setup and Server
-
-Create the MySQL database first.
-
-Run migrations:
+Apply database migrations:
 
 ```powershell
 python manage.py migrate
 ```
 
-Check the Django configuration:
+Run Django's system checks:
 
 ```powershell
 python manage.py check
@@ -129,243 +227,213 @@ Start the development server:
 python manage.py runserver
 ```
 
-Local server URL:
+The local development server is available at `http://127.0.0.1:8000/`.
 
-```text
-http://127.0.0.1:8000/
-```
+## Application Roles and Access Control
 
-## Authentication Endpoints
+The application has three roles:
 
-Base URL: `/api/accounts/`
+| Role | Main capabilities |
+| --- | --- |
+| CUSTOMER | Submit complaints, view own complaints and tickets, and send/receive ticket messages |
+| AGENT | Review pending complaints, convert complaints to tickets, manage assigned tickets, communicate with customers, and generate AI reply suggestions |
+| ADMIN | Manage application users/roles, access all tickets, and manage support operations |
 
-| Method     | Endpoint                         | Access                               |
-| ---------- | -------------------------------- | ------------------------------------ |
-| POST       | `/api/accounts/register/`        | Public                               |
-| POST       | `/api/accounts/login/`           | Public                               |
-| POST       | `/api/accounts/token/refresh/`   | Public                               |
-| POST       | `/api/accounts/google/`          | Public; requires Google ID token     |
-| POST       | `/api/accounts/google/link/`     | Authenticated                        |
-| POST       | `/api/accounts/logout/`          | Authenticated                        |
-| GET, PATCH | `/api/accounts/profile/`         | Authenticated; own profile           |
-| POST       | `/api/accounts/forgot-password/` | Public                               |
-| POST       | `/api/accounts/reset-password/`  | Public; valid UID and token required |
+Public registration creates a CUSTOMER account. Users cannot promote themselves or change their own application role.
 
-Protected endpoints use the Authorization header:
+### Application Admin versus Django Superuser
 
-```text
+A Django superuser and an application ADMIN role are separate concepts. To create the first application administrator:
+
+1. Run `python manage.py createsuperuser`.
+2. Sign in to Django admin at `/admin/`.
+3. Open Accounts → User profiles.
+4. Set the intended user's application role to `ADMIN`.
+
+## Implemented API Endpoints
+
+All paths below are relative to the local backend base URL `http://127.0.0.1:8000`.
+
+### Authentication and Accounts
+
+Base path: `/api/accounts/`
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| POST | `/api/accounts/register/` | Public |
+| POST | `/api/accounts/login/` | Public |
+| POST | `/api/accounts/token/refresh/` | Public |
+| POST | `/api/accounts/logout/` | Authenticated |
+| GET, PATCH | `/api/accounts/profile/` | Authenticated; own profile |
+| POST | `/api/accounts/forgot-password/` | Public |
+| POST | `/api/accounts/reset-password/` | Public; valid reset token required |
+| POST | `/api/accounts/google/` | Public; valid Google ID token required |
+| POST | `/api/accounts/google/link/` | Authenticated |
+| PATCH | `/api/accounts/users/<user_id>/role/` | Application ADMIN |
+
+Protected endpoints use:
+
+```http
 Authorization: Bearer <access_token>
 ```
 
-Email registration returns access and refresh tokens immediately.
+Google account linking requires the user to authenticate with the existing account first. The supplied Google ID token must be valid for the configured client, have a verified email, and match the signed-in account's email.
 
-Google login creates a new CUSTOMER account only when the verified Google email is not already registered.
+### Complaints and Tickets
 
-### Google Account Linking
+Base path: `/api/`
 
-Automatic email-based account linking is deliberately rejected.
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| POST | `/api/complaints/` | CUSTOMER |
+| GET | `/api/complaints/my/` | CUSTOMER; own complaints |
+| GET | `/api/complaints/pending/` | AGENT or ADMIN |
+| POST | `/api/complaints/<complaint_id>/convert/` | AGENT |
+| GET | `/api/tickets/` | Authenticated; role-filtered |
+| GET | `/api/tickets/<ticket_id>/` | Ticket owner, assigned agent, or ADMIN |
+| PATCH | `/api/tickets/<ticket_id>/update/` | Assigned agent or ADMIN |
+| POST | `/api/tickets/<ticket_id>/assign/` | Authorized ticket-management role |
+| GET | `/api/tickets/<ticket_id>/history/` | Authorized ticket user |
 
-The user must:
+### SLA and Ticket Communication
 
-1. Authenticate using the existing account.
-2. Submit a Google ID token to `/api/accounts/google/link/`.
-3. Provide the access token in the Authorization header.
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| GET, POST | `/api/tickets/<ticket_id>/messages/` | Ticket owner, assigned agent, or ADMIN |
+| GET | `/api/tickets/<ticket_id>/first-response/` | Authenticated, subject to view permissions |
+| POST | `/api/tickets/<ticket_id>/ai-reply/` | Assigned agent or ADMIN |
 
-The Google token must be valid for the configured client, contain a verified email and match the signed-in user's email.
+### Knowledge Base and FAQs
 
-## Application Roles
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET, POST | `/api/knowledge/categories/` | List/create knowledge categories |
+| GET, PUT, PATCH, DELETE | `/api/knowledge/categories/<id>/` | Retrieve/manage a category |
+| GET, POST | `/api/knowledge/articles/` | List/create knowledge articles |
+| GET, PUT, PATCH, DELETE | `/api/knowledge/articles/<id>/` | Retrieve/manage an article |
+| POST | `/api/knowledge/articles/<id>/publish/` | Publish an article |
+| GET, POST | `/api/faqs/` | List/create FAQs |
+| GET, PUT, PATCH, DELETE | `/api/faqs/<id>/` | Retrieve/manage an FAQ |
+| POST | `/api/faqs/<id>/publish/` | Publish an FAQ |
 
-The application supports three roles:
+Actual permissions depend on the endpoint and HTTP method. The role restrictions above are a high-level guide; the API's permission classes and ticket-ownership checks remain authoritative.
 
-### CUSTOMER
+## AI Integration and Reliability
 
-- Submit complaints.
-- Track complaints.
-- View their own tickets.
-- Communicate with support agents.
+The backend uses the Google Gen AI SDK and the Gemini model `gemini-3.5-flash-lite` for two separate support workflows.
 
-### AGENT
+### 1. Complaint Classification
 
-- Review pending customer complaints.
-- Convert complaints into tickets.
-- Manage assigned tickets.
-- Communicate with customers.
-- Generate AI reply suggestions.
+When a customer submits a complaint, the classifier asks Gemini to return structured data:
 
-### ADMIN
+- Category: BILLING, TECHNICAL, ACCOUNT, or OTHER.
+- Suggested priority: LOW, MEDIUM, HIGH, or CRITICAL.
+- Sentiment: POSITIVE, NEUTRAL, or NEGATIVE.
+- Short complaint summary.
 
-- Manage users and application roles.
-- Access all tickets.
-- Monitor ticket operations.
+The response is validated against a Pydantic schema before it is used by the complaint workflow.
 
-Public registration always creates a CUSTOMER account.
+**Classification fallback:** If the Gemini call fails (including a missing API key or an API/response error), the exception is logged and complaint creation continues with:
 
-Users cannot change their own application roles.
+| Field | Fallback |
+| --- | --- |
+| Category | OTHER |
+| Priority | MEDIUM |
+| Sentiment | NEUTRAL |
+| Summary | AI classification is currently unavailable. |
 
-### Role Management Endpoint
+This fallback preserves complaint submission when the external AI service is unavailable. The fallback values are not an AI classification result.
 
-| Method | Endpoint                              | Access     |
-| ------ | ------------------------------------- | ---------- |
-| PATCH  | `/api/accounts/users/<user_id>/role/` | ADMIN only |
+### 2. Agent Reply Suggestions
 
-### Django Superuser and Application Admin
+The reply generator builds a prompt from ticket details and the latest 30 ticket messages. It asks Gemini for a concise customer-facing draft. The endpoint returns the draft to the authorized agent; it does not create a TicketMessage or send an email.
 
-A Django superuser is not automatically an Application Admin.
+If generation fails, the backend logs the error and the endpoint returns HTTP `503 Service Unavailable` with a generic error response. An empty Gemini output is rejected rather than returned as a usable suggestion.
 
-To create the first Application Admin:
+### Retry Configuration
 
-1. Create a Django superuser using `python manage.py createsuperuser`.
-2. Sign in to `/admin/`.
-3. Open Accounts → User profiles.
-4. Change the selected user's application role to `ADMIN`.
+Both Gemini client configurations use the Google Gen AI SDK retry options:
 
-The distinction between Django superuser permissions and application roles is intentional.
+- Maximum attempts: `3`.
+- Initial delay: `1` second.
+- Maximum delay: `4` seconds.
+- Exponential base: `2`.
+- Jitter: `0.5`.
+- Configured retryable HTTP status codes: `429`, `500`, `502`, `503`, and `504`.
 
-## Complaint and Ticket Management
+These settings configure retries for the listed transient HTTP errors. They do not guarantee that every failure will be retried or that the external service will eventually recover.
 
-- Customers can submit multiple complaints.
-- Agents can view pending customer complaints.
-- Only Agents can convert complaints into tickets.
-- Each complaint can be converted into only one ticket.
-- Ticket numbers are generated automatically using category, year and a unique database ID.
-- Customers can view their own tickets.
-- Agents can view their assigned tickets.
-- Administrators can view all tickets.
+### AI Safety and Human Review
 
-### Complaint and Ticket API Endpoints
+The reply prompt instructs the model to treat ticket and conversation text as untrusted input, prioritize the latest customer concern, avoid disclosing confidential information, and avoid unsupported claims or promises. These are risk-reduction instructions, not a complete security boundary.
 
-| Method | Endpoint                                  | Access                 |
-| ------ | ----------------------------------------- | ---------------------- |
-| POST   | `/api/complaints/`                        | Customer               |
-| GET    | `/api/complaints/my/`                     | Customer               |
-| GET    | `/api/complaints/pending/`                | Agent, Admin           |
-| POST   | `/api/complaints/<complaint_id>/convert/` | Agent                  |
-| GET    | `/api/tickets/`                           | Customer, Agent, Admin |
+A support agent must review the generated text before sending it. Do not treat an AI-generated draft as proof that an investigation, account change, refund, or resolution has occurred.
 
-## SLA and Escalation Management
+## SLA Monitoring and Escalation
 
-The system includes:
+SLA policies define response and resolution targets for ticket priorities. Each ticket's SLA record tracks its deadlines and current response/resolution status. The monitoring process checks deadlines and creates escalation records for applicable breaches.
 
-- SLA policies based on ticket priority.
-- Response and resolution deadlines.
-- First-response tracking.
-- SLA status monitoring.
-- Deadline recalculation when ticket priority changes.
-- Resolution SLA handling when tickets are reopened.
-- Multi-level ticket escalation.
-- Ticket history tracking.
-- Automated SLA monitoring through a Django management command.
-
-The SLA monitoring command is:
+Run the monitoring command manually from `backend/`:
 
 ```powershell
 python manage.py run_sla_monitor
 ```
 
-For automated execution, configure a scheduler such as Windows Task Scheduler.
+For repeated automatic monitoring on Windows, the command can be scheduled with Windows Task Scheduler. A scheduler must be configured by the operator; the management command does not run continuously by itself.
 
-## Knowledge Base and FAQ
+## Knowledge Base and FAQs
 
-The system includes:
+Knowledge articles and FAQs support draft and published states. Publishing is handled through dedicated endpoints. Public-facing authenticated users receive published content, while agents and administrators can access broader content for support operations. Article and FAQ retrieval increments their view counters.
 
-- Knowledge Base categories.
-- Knowledge articles.
-- Article publishing workflow.
-- FAQ management.
-- Article view-count tracking.
+## Testing
 
-These features provide structured support information for customers and support staff.
+Run commands from `backend/` with the virtual environment activated and test database prerequisites configured.
 
-## Ticket Messaging and AI Reply Generation
-
-### Ticket Messaging
-
-Customers and authorized support staff can exchange messages within tickets.
-
-- Customers can access only their own tickets.
-- Agents can access only tickets assigned to them.
-- Administrators can access all tickets.
-- Messages are stored and retrieved in chronological order.
-- An assigned agent's first response can be recorded against the ticket's SLA.
-
-### Messaging API
-
-| Method | Endpoint                             | Access                                     |
-| ------ | ------------------------------------ | ------------------------------------------ |
-| GET    | `/api/tickets/<ticket_id>/messages/` | Authorized customer, assigned agent, Admin |
-| POST   | `/api/tickets/<ticket_id>/messages/` | Authorized customer, assigned agent, Admin |
-
-### AI Reply Generation
-
-The system integrates Google Gemini to generate suggested customer-support replies.
-
-Workflow:
-
-1. Customer sends a message.
-2. Support agent views the ticket conversation.
-3. Agent requests an AI-generated reply suggestion.
-4. Gemini generates a draft using ticket details and recent conversation history.
-5. Agent reviews and edits the suggestion.
-6. Agent sends the approved reply through the existing messaging API.
-
-AI reply generation includes:
-
-- Conversation-aware reply generation.
-- Retrieval of the latest 30 messages.
-- Instructions to prioritize the latest customer concern.
-- Instructions to avoid unsupported claims and promises.
-- Prompt-injection resistance instructions.
-- Empty-response validation.
-- Error handling when the Gemini service is unavailable.
-
-### AI Reply API
-
-| Method | Endpoint                             | Access                |
-| ------ | ------------------------------------ | --------------------- |
-| POST   | `/api/tickets/<ticket_id>/ai-reply/` | Assigned agent, Admin |
-
-**Important:** AI suggestions are private to support staff. They are not automatically saved or sent. Support agents must review and approve suggestions before sending them.
-
-Prompt instructions reduce the risk of malicious input influencing AI responses, but they do not guarantee complete protection against prompt injection.
-
-## Tests
-
-Run test commands from the `backend/` directory.
-
-Run account management tests:
+Run account tests:
 
 ```powershell
 python manage.py test accounts
 ```
 
-Run ticket management tests:
+Run ticket API tests:
 
 ```powershell
 python manage.py test ticket_Api.tests
 ```
 
-Run the complete project test suite:
+Run all Django tests:
 
 ```powershell
 python manage.py test
 ```
 
-The ticket API tests cover complaint and ticket management, SLA and escalation workflows, Knowledge Base and FAQ functionality, ticket messaging and AI reply generation.
+The ticket API test suite includes tests for complaint/ticket workflows, role-based access, SLA and escalation behavior, Knowledge Base/FAQ operations, ticket messaging, and AI reply generation. Gemini-dependent behavior is mocked in relevant automated tests so those tests do not require a live Gemini API call.
 
-AI service tests use mocked Gemini responses where appropriate to verify application behavior without depending on live API calls.
+**Verified test result during the latest documented development check:** `ticket_Api.tests` — 76 tests passed. Test results can change as the code evolves; rerun the commands above to verify the current checkout.
 
-## Security Notes
+## Security Notes and Limitations
 
-- Keep `.env` private.
-- Use `.env.example` only as a configuration template.
-- Never expose API keys, passwords or private credentials.
+- Keep real secrets in the local `.env` file and never commit it.
+- Use a strong private Django `SECRET_KEY`.
+- Set `DEBUG=False` and configure production `ALLOWED_HOSTS` before deployment.
 - Use HTTPS in production.
-- Configure a production SMTP provider.
-- Review allowed hosts and disable Django debug mode in production.
-- Use appropriate database permissions.
-- Review rate limits and authentication settings.
-- Require support-agent review before sending AI-generated replies.
+- Configure a production email provider before enabling real email delivery.
+- Use database credentials with only the permissions the application needs.
+- Review authentication, rate limiting, CORS/CSRF, logging, and deployment settings before production use.
+- Keep AI-generated replies subject to human review.
+- Prompt instructions reduce prompt-injection risk but cannot guarantee complete protection.
+- The current repository is a backend project. A React user interface and production deployment are not included yet.
 
-## Project Repository
+## Roadmap
 
-GitHub: https://github.com/anjalipatharla/AI-Ticket-Management-System
+The following work is not represented as completed:
+
+- React frontend and integration with the backend APIs.
+- Email notifications and notification templates/workflows.
+- Analytics dashboards and reporting.
+- Broader end-to-end testing across a deployed environment.
+- Production deployment, hosting configuration, and operational monitoring.
+
+## Repository
+
+[AI-Ticket-Management-System on GitHub](https://github.com/anjalipatharla/AI-Ticket-Management-System)
