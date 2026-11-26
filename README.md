@@ -423,6 +423,18 @@ The ticket API test suite includes tests for complaint/ticket workflows, role-ba
 - Prompt instructions reduce prompt-injection risk but cannot guarantee complete protection.
 - This repository currently documents and contains the backend implementation; no frontend or deployment is included in the completed scope.
 
+
+## Planned Work
+
+The following items are planned and are not yet part of the completed implementation:
+
+- React frontend and integration with the existing backend APIs.
+- Email notifications and notification templates/workflows.
+- Analytics dashboards and reporting.
+- Broader end-to-end testing across the integrated application.
+- Production deployment, hosting configuration, and operational monitoring.
+
+
 ## Repository
 
 [AI-Ticket-Management-System on GitHub](https://github.com/anjalipatharla/AI-Ticket-Management-System)
