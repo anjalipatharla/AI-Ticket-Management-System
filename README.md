@@ -4,7 +4,7 @@ A role-based customer support and ticket management backend built with Django RE
 
 The system is designed around a complete support workflow: customers submit complaints, support agents review and convert them into tickets, ticket ownership and access are controlled by application roles, SLA deadlines are monitored, escalations are recorded, and customers and agents communicate through ticket conversations.
 
-> **Project status:** Backend authentication, complaint/ticket workflows, AI complaint classification, SLA monitoring and escalation, Knowledge Base/FAQ, ticket messaging, and AI reply suggestions are implemented. React frontend, email notification workflows, analytics/reporting, and deployment remain planned work.
+> **Project scope:** This README documents the backend functionality implemented so far. It does not present unfinished features as completed.
 
 ## Table of Contents
 
@@ -21,7 +21,6 @@ The system is designed around a complete support workflow: customers submit comp
 - [Knowledge Base and FAQs](#knowledge-base-and-faqs)
 - [Testing](#testing)
 - [Security Notes and Limitations](#security-notes-and-limitations)
-- [Roadmap](#roadmap)
 
 ## Features
 
@@ -422,17 +421,7 @@ The ticket API test suite includes tests for complaint/ticket workflows, role-ba
 - Review authentication, rate limiting, CORS/CSRF, logging, and deployment settings before production use.
 - Keep AI-generated replies subject to human review.
 - Prompt instructions reduce prompt-injection risk but cannot guarantee complete protection.
-- The current repository is a backend project. A React user interface and production deployment are not included yet.
-
-## Roadmap
-
-The following work is not represented as completed:
-
-- React frontend and integration with the backend APIs.
-- Email notifications and notification templates/workflows.
-- Analytics dashboards and reporting.
-- Broader end-to-end testing across a deployed environment.
-- Production deployment, hosting configuration, and operational monitoring.
+- This repository currently documents and contains the backend implementation; no frontend or deployment is included in the completed scope.
 
 ## Repository
 
