@@ -19,6 +19,7 @@ The system is designed around a complete support workflow: customers submit comp
 - [AI Integration and Reliability](#ai-integration-and-reliability)
 - [SLA Monitoring and Escalation](#sla-monitoring-and-escalation)
 - [Knowledge Base and FAQs](#knowledge-base-and-faqs)
+- [Audit Logging](#audit-logging)
 - [Testing](#testing)
 - [Security Notes and Limitations](#security-notes-and-limitations)
 
@@ -95,20 +96,29 @@ The system is designed around a complete support workflow: customers submit comp
 - AI service errors are logged and returned as HTTP 503 by the reply-generation endpoint.
 - AI drafts are private, transient suggestions: they are not automatically stored as messages or sent to customers. The support agent must review, edit, and send an approved reply using the normal messaging endpoint.
 
+### Audit Logging
+
+- Records important actions across complaint and ticket workflows.
+- Tracks complaint creation, ticket creation, assignment, reassignment, status and priority changes.
+- Records first-response events and successful AI reply generation.
+- Tracks knowledge article and FAQ publishing events.
+- Provides an admin-only API to retrieve audit records.
+- Audit metadata does not store ticket message bodies or generated AI reply content.
+
 ## Technology Stack
 
-| Area | Technology |
-| --- | --- |
-| Language | Python |
-| Backend framework | Django 5.2 |
-| API framework | Django REST Framework |
-| Database | MySQL |
-| Authentication | JSON Web Tokens (Simple JWT) |
-| Social login | Google OAuth ID-token verification |
-| AI integration | Google Gemini API using the Google Gen AI SDK |
-| Configuration | python-decouple / environment variables |
-| API verification | Postman |
-| Version control | Git and GitHub |
+| Area              | Technology                                    |
+| ----------------- | --------------------------------------------- |
+| Language          | Python                                        |
+| Backend framework | Django 5.2                                    |
+| API framework     | Django REST Framework                         |
+| Database          | MySQL                                         |
+| Authentication    | JSON Web Tokens (Simple JWT)                  |
+| Social login      | Google OAuth ID-token verification            |
+| AI integration    | Google Gemini API using the Google Gen AI SDK |
+| Configuration     | python-decouple / environment variables       |
+| API verification  | Postman                                       |
+| Version control   | Git and GitHub                                |
 
 ## Architecture and Project Structure
 
@@ -135,6 +145,7 @@ AI-Ticket-Management-System/
         │   └── commands/
         │       └── run_sla_monitor.py
         ├── migrations/
+        ├── audit.py
         ├── models.py
         ├── serializers.py
         ├── urls.py
@@ -182,23 +193,23 @@ Copy-Item .env.example .env
 
 Create the MySQL database and update the values in `.env`.
 
-| Variable | Purpose |
-| --- | --- |
-| `SECRET_KEY` | Private Django secret key |
-| `DEBUG` | Django debug setting; use `False` in production |
-| `ALLOWED_HOSTS` | Comma-separated allowed host names |
-| `DB_NAME` | MySQL database name |
-| `DB_USER` | MySQL username |
-| `DB_PASSWORD` | MySQL password |
-| `DB_HOST` | MySQL host |
-| `DB_PORT` | MySQL port |
-| `GOOGLE_CLIENT_ID` | Google OAuth Web Client ID |
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `EMAIL_BACKEND` | Django email backend |
-| `DEFAULT_FROM_EMAIL` | Sender address for outgoing email |
-| `EMAIL_HOST`, `EMAIL_PORT` | SMTP server configuration, if SMTP is used |
-| `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | SMTP credentials, if SMTP is used |
-| `EMAIL_USE_TLS` | Whether SMTP uses TLS |
+| Variable                                 | Purpose                                         |
+| ---------------------------------------- | ----------------------------------------------- |
+| `SECRET_KEY`                             | Private Django secret key                       |
+| `DEBUG`                                  | Django debug setting; use `False` in production |
+| `ALLOWED_HOSTS`                          | Comma-separated allowed host names              |
+| `DB_NAME`                                | MySQL database name                             |
+| `DB_USER`                                | MySQL username                                  |
+| `DB_PASSWORD`                            | MySQL password                                  |
+| `DB_HOST`                                | MySQL host                                      |
+| `DB_PORT`                                | MySQL port                                      |
+| `GOOGLE_CLIENT_ID`                       | Google OAuth Web Client ID                      |
+| `GEMINI_API_KEY`                         | Google Gemini API key                           |
+| `EMAIL_BACKEND`                          | Django email backend                            |
+| `DEFAULT_FROM_EMAIL`                     | Sender address for outgoing email               |
+| `EMAIL_HOST`, `EMAIL_PORT`               | SMTP server configuration, if SMTP is used      |
+| `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | SMTP credentials, if SMTP is used               |
+| `EMAIL_USE_TLS`                          | Whether SMTP uses TLS                           |
 
 For local development, the example configuration uses Django's console email backend. Password-reset email content is printed in the terminal running the Django server. Configure a real SMTP provider before using email workflows in a deployed environment.
 
@@ -232,11 +243,11 @@ The local development server is available at `http://127.0.0.1:8000/`.
 
 The application has three roles:
 
-| Role | Main capabilities |
-| --- | --- |
-| CUSTOMER | Submit complaints, view own complaints and tickets, and send/receive ticket messages |
-| AGENT | Review pending complaints, convert complaints to tickets, manage assigned tickets, communicate with customers, and generate AI reply suggestions |
-| ADMIN | Manage application users/roles, access all tickets, and manage support operations |
+| Role     | Main capabilities                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CUSTOMER | Submit complaints, view own complaints and tickets, and send/receive ticket messages                                                             |
+| AGENT    | Review pending complaints, convert complaints to tickets, manage assigned tickets, communicate with customers, and generate AI reply suggestions |
+| ADMIN    | Manage application users/roles, access all tickets, and manage support operations                                                                |
 
 Public registration creates a CUSTOMER account. Users cannot promote themselves or change their own application role.
 
@@ -257,18 +268,18 @@ All paths below are relative to the local backend base URL `http://127.0.0.1:800
 
 Base path: `/api/accounts/`
 
-| Method | Endpoint | Access |
-| --- | --- | --- |
-| POST | `/api/accounts/register/` | Public |
-| POST | `/api/accounts/login/` | Public |
-| POST | `/api/accounts/token/refresh/` | Public |
-| POST | `/api/accounts/logout/` | Authenticated |
-| GET, PATCH | `/api/accounts/profile/` | Authenticated; own profile |
-| POST | `/api/accounts/forgot-password/` | Public |
-| POST | `/api/accounts/reset-password/` | Public; valid reset token required |
-| POST | `/api/accounts/google/` | Public; valid Google ID token required |
-| POST | `/api/accounts/google/link/` | Authenticated |
-| PATCH | `/api/accounts/users/<user_id>/role/` | Application ADMIN |
+| Method     | Endpoint                              | Access                                 |
+| ---------- | ------------------------------------- | -------------------------------------- |
+| POST       | `/api/accounts/register/`             | Public                                 |
+| POST       | `/api/accounts/login/`                | Public                                 |
+| POST       | `/api/accounts/token/refresh/`        | Public                                 |
+| POST       | `/api/accounts/logout/`               | Authenticated                          |
+| GET, PATCH | `/api/accounts/profile/`              | Authenticated; own profile             |
+| POST       | `/api/accounts/forgot-password/`      | Public                                 |
+| POST       | `/api/accounts/reset-password/`       | Public; valid reset token required     |
+| POST       | `/api/accounts/google/`               | Public; valid Google ID token required |
+| POST       | `/api/accounts/google/link/`          | Authenticated                          |
+| PATCH      | `/api/accounts/users/<user_id>/role/` | Application ADMIN                      |
 
 Protected endpoints use:
 
@@ -282,40 +293,48 @@ Google account linking requires the user to authenticate with the existing accou
 
 Base path: `/api/`
 
-| Method | Endpoint | Access |
-| --- | --- | --- |
-| POST | `/api/complaints/` | CUSTOMER |
-| GET | `/api/complaints/my/` | CUSTOMER; own complaints |
-| GET | `/api/complaints/pending/` | AGENT or ADMIN |
-| POST | `/api/complaints/<complaint_id>/convert/` | AGENT |
-| GET | `/api/tickets/` | Authenticated; role-filtered |
-| GET | `/api/tickets/<ticket_id>/` | Ticket owner, assigned agent, or ADMIN |
-| PATCH | `/api/tickets/<ticket_id>/update/` | Assigned agent or ADMIN |
-| POST | `/api/tickets/<ticket_id>/assign/` | Authorized ticket-management role |
-| GET | `/api/tickets/<ticket_id>/history/` | Authorized ticket user |
+| Method | Endpoint                                  | Access                                 |
+| ------ | ----------------------------------------- | -------------------------------------- |
+| POST   | `/api/complaints/`                        | CUSTOMER                               |
+| GET    | `/api/complaints/my/`                     | CUSTOMER; own complaints               |
+| GET    | `/api/complaints/pending/`                | AGENT or ADMIN                         |
+| POST   | `/api/complaints/<complaint_id>/convert/` | AGENT                                  |
+| GET    | `/api/tickets/`                           | Authenticated; role-filtered           |
+| GET    | `/api/tickets/<ticket_id>/`               | Ticket owner, assigned agent, or ADMIN |
+| PATCH  | `/api/tickets/<ticket_id>/update/`        | Assigned agent or ADMIN                |
+| POST   | `/api/tickets/<ticket_id>/assign/`        | Authorized ticket-management role      |
+| GET    | `/api/tickets/<ticket_id>/history/`       | Authorized ticket user                 |
 
 ### SLA and Ticket Communication
 
-| Method | Endpoint | Access |
-| --- | --- | --- |
-| GET, POST | `/api/tickets/<ticket_id>/messages/` | Ticket owner, assigned agent, or ADMIN |
-| GET | `/api/tickets/<ticket_id>/first-response/` | Authenticated, subject to view permissions |
-| POST | `/api/tickets/<ticket_id>/ai-reply/` | Assigned agent or ADMIN |
+| Method    | Endpoint                                   | Access                                     |
+| --------- | ------------------------------------------ | ------------------------------------------ |
+| GET, POST | `/api/tickets/<ticket_id>/messages/`       | Ticket owner, assigned agent, or ADMIN     |
+| GET       | `/api/tickets/<ticket_id>/first-response/` | Authenticated, subject to view permissions |
+| POST      | `/api/tickets/<ticket_id>/ai-reply/`       | Assigned agent or ADMIN                    |
 
 ### Knowledge Base and FAQs
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| GET, POST | `/api/knowledge/categories/` | List/create knowledge categories |
-| GET, PUT, PATCH, DELETE | `/api/knowledge/categories/<id>/` | Retrieve/manage a category |
-| GET, POST | `/api/knowledge/articles/` | List/create knowledge articles |
-| GET, PUT, PATCH, DELETE | `/api/knowledge/articles/<id>/` | Retrieve/manage an article |
-| POST | `/api/knowledge/articles/<id>/publish/` | Publish an article |
-| GET, POST | `/api/faqs/` | List/create FAQs |
-| GET, PUT, PATCH, DELETE | `/api/faqs/<id>/` | Retrieve/manage an FAQ |
-| POST | `/api/faqs/<id>/publish/` | Publish an FAQ |
+| Method                  | Endpoint                                | Purpose                          |
+| ----------------------- | --------------------------------------- | -------------------------------- |
+| GET, POST               | `/api/knowledge/categories/`            | List/create knowledge categories |
+| GET, PUT, PATCH, DELETE | `/api/knowledge/categories/<id>/`       | Retrieve/manage a category       |
+| GET, POST               | `/api/knowledge/articles/`              | List/create knowledge articles   |
+| GET, PUT, PATCH, DELETE | `/api/knowledge/articles/<id>/`         | Retrieve/manage an article       |
+| POST                    | `/api/knowledge/articles/<id>/publish/` | Publish an article               |
+| GET, POST               | `/api/faqs/`                            | List/create FAQs                 |
+| GET, PUT, PATCH, DELETE | `/api/faqs/<id>/`                       | Retrieve/manage an FAQ           |
+| POST                    | `/api/faqs/<id>/publish/`               | Publish an FAQ                   |
 
 Actual permissions depend on the endpoint and HTTP method. The role restrictions above are a high-level guide; the API's permission classes and ticket-ownership checks remain authoritative.
+
+### Audit Logs
+
+Base path: `/api/admin/`
+
+| Method | Endpoint                 | Access            | Purpose                              |
+| ------ | ------------------------ | ----------------- | ------------------------------------ |
+| GET    | `/api/admin/audit-logs/` | Application ADMIN | Retrieve audit records, newest first |
 
 ## AI Integration and Reliability
 
@@ -334,12 +353,12 @@ The response is validated against a Pydantic schema before it is used by the com
 
 **Classification fallback:** If the Gemini call fails (including a missing API key or an API/response error), the exception is logged and complaint creation continues with:
 
-| Field | Fallback |
-| --- | --- |
-| Category | OTHER |
-| Priority | MEDIUM |
-| Sentiment | NEUTRAL |
-| Summary | AI classification is currently unavailable. |
+| Field     | Fallback                                    |
+| --------- | ------------------------------------------- |
+| Category  | OTHER                                       |
+| Priority  | MEDIUM                                      |
+| Sentiment | NEUTRAL                                     |
+| Summary   | AI classification is currently unavailable. |
 
 This fallback preserves complaint submission when the external AI service is unavailable. The fallback values are not an AI classification result.
 
@@ -408,7 +427,7 @@ python manage.py test
 
 The ticket API test suite includes tests for complaint/ticket workflows, role-based access, SLA and escalation behavior, Knowledge Base/FAQ operations, ticket messaging, and AI reply generation. Gemini-dependent behavior is mocked in relevant automated tests so those tests do not require a live Gemini API call.
 
-**Verified test result during the latest documented development check:** `ticket_Api.tests` — 76 tests passed. Test results can change as the code evolves; rerun the commands above to verify the current checkout.
+**Verified test result during the latest documented development check:** Full Django test suite — 100 tests passed. Test results can change as the code evolves; rerun the commands above to verify the current checkout.
 
 ## Security Notes and Limitations
 
@@ -423,7 +442,6 @@ The ticket API test suite includes tests for complaint/ticket workflows, role-ba
 - Prompt instructions reduce prompt-injection risk but cannot guarantee complete protection.
 - This repository currently documents and contains the backend implementation; no frontend or deployment is included in the completed scope.
 
-
 ## Planned Work
 
 The following items are planned and are not yet part of the completed implementation:
@@ -433,7 +451,6 @@ The following items are planned and are not yet part of the completed implementa
 - Analytics dashboards and reporting.
 - Broader end-to-end testing across the integrated application.
 - Production deployment, hosting configuration, and operational monitoring.
-
 
 ## Repository
 
