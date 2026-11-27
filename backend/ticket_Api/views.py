@@ -9,6 +9,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from .ai_services.complaint_classifier import classify_complaint
 from .ai_services.reply_generator import generate_reply
+from .audit import log_audit_event
 
 # Django REST Framework imports
 from rest_framework import generics, status
@@ -37,6 +38,7 @@ from .models import (
     KnowledgeArticle,
     FAQ,
     TicketMessage,
+    AuditLog,
 )
 
 # Ticket API serializer imports
@@ -50,6 +52,7 @@ from .serializers import (
     KnowledgeArticleSerializer,
     FAQSerializer,
     TicketMessageSerializer,
+    AuditLogSerializer,
 )
 
 import logging
@@ -92,6 +95,17 @@ class ComplaintCreateView(generics.CreateAPIView):
             ai_suggested_priority=ai_result["priority"],
             ai_sentiment=ai_result["sentiment"],
             ai_summary=ai_result["summary"]
+        )
+        log_audit_event(
+            request=request,
+            action="COMPLAINT_CREATED",
+            entity_type="Complaint",
+            entity_id=complaint.id,
+            description="Customer submitted a new complaint.",
+            metadata={
+                "category": complaint.category,
+                "priority": complaint.ai_suggested_priority
+            }
         )
 
         # 4. Prepare API response
@@ -254,11 +268,32 @@ class ConvertComplaintToTicketView(APIView):
                 new_value=request.user.username,
                 comment="Ticket initially assigned to converting agent."
             )
+            log_audit_event(
+                request=request,
+                action="TICKET_ASSIGNED",
+                entity_type="Ticket",
+                entity_id=ticket.ticket_number,
+                description="Ticket initially assigned to converting agent.",
+                metadata={
+                    "assigned_to": request.user.username
+                }
+            )
 
             # 7. Update complaint status
             complaint.status = Complaint.Status.CONVERTED
             complaint.save(
                 update_fields=["status", "updated_at"]
+            )
+            log_audit_event(
+                request=request,
+                action="TICKET_CREATED",
+                entity_type="Ticket",
+                entity_id=ticket.ticket_number,
+                description="Ticket created from customer complaint.",
+                metadata={
+                    "complaint_id": complaint.id,
+                    "priority": ticket.priority
+                }
             )
 
         return Response(
@@ -402,6 +437,16 @@ class TicketMessageListCreateView(APIView):
                             f"SLA status: {sla.response_status}."
                         )
                     )
+                    log_audit_event(
+                        request=request,
+                        action="FIRST_RESPONSE_RECORDED",
+                        entity_type="Ticket",
+                        entity_id=ticket.ticket_number,
+                        description="Assigned agent's first response recorded.",
+                        metadata={
+                            "response_status": sla.response_status
+                        }
+                    )
 
         return Response(
             TicketMessageSerializer(message).data,
@@ -443,6 +488,14 @@ class AIReplyGenerationView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
+        log_audit_event(
+            request=request,
+            action="AI_REPLY_GENERATED",
+            entity_type="Ticket",
+            entity_id=ticket.ticket_number,
+            description="AI reply suggestion generated successfully."
+        )
+
         return Response(
             {
                 "ticket_number": ticket.ticket_number,
@@ -450,7 +503,6 @@ class AIReplyGenerationView(APIView):
             },
             status=status.HTTP_200_OK
         )
-
 # 6. Users view individual ticket details
 
 
@@ -555,7 +607,7 @@ class TicketUpdateView(APIView):
                 and ticket.status not in [
                         Ticket.Status.RESOLVED,
                         Ticket.Status.CLOSED
-                ]
+                        ]
             ):
 
                 sla = TicketSLA.objects.select_for_update().filter(ticket=ticket).first()
@@ -616,6 +668,17 @@ class TicketUpdateView(APIView):
                     old_value=old_status,
                     new_value=ticket.status
                 )
+                log_audit_event(
+                    request=request,
+                    action="TICKET_STATUS_CHANGED",
+                    entity_type="Ticket",
+                    entity_id=ticket.ticket_number,
+                    description="Ticket status updated.",
+                    metadata={
+                        "old_status": old_status,
+                        "new_status": ticket.status
+                    }
+                )
 
             # Record priority changes
             if old_priority != ticket.priority:
@@ -624,6 +687,17 @@ class TicketUpdateView(APIView):
                     changed_by=request.user,
                     old_value=old_priority,
                     new_value=ticket.priority
+                )
+                log_audit_event(
+                    request=request,
+                    action="TICKET_PRIORITY_CHANGED",
+                    entity_type="Ticket",
+                    entity_id=ticket.ticket_number,
+                    description="Ticket priority updated.",
+                    metadata={
+                        "old_priority": old_priority,
+                        "new_priority": ticket.priority
+                    }
                 )
 
         return Response(
@@ -674,6 +748,17 @@ class TicketAssignmentView(APIView):
                 changed_by=request.user,
                 old_value=old_agent.username,
                 new_value=new_agent.username
+            )
+            log_audit_event(
+                request=request,
+                action="TICKET_REASSIGNED",
+                entity_type="Ticket",
+                entity_id=ticket.ticket_number,
+                description="Ticket reassigned to another support agent.",
+                metadata={
+                    "previous_agent": old_agent.username,
+                    "new_agent": new_agent.username
+                }
             )
 
         return Response(
@@ -776,6 +861,16 @@ class FirstResponseView(APIView):
                 changed_by=request.user,
                 new_value=first_response_time.isoformat(),
                 comment=f"First response recorded. SLA status: {sla.response_status}."
+            )
+            log_audit_event(
+                request=request,
+                action="FIRST_RESPONSE_RECORDED",
+                entity_type="Ticket",
+                entity_id=ticket.ticket_number,
+                description="Assigned agent's first response recorded.",
+                metadata={
+                    "response_status": sla.response_status
+                }
             )
 
         return Response(
@@ -991,6 +1086,13 @@ class KnowledgeArticlePublishView(generics.GenericAPIView):
         article.status = KnowledgeArticle.Status.PUBLISHED
         article.published_at = timezone.now()
         article.save(update_fields=["status", "published_at", "updated_at"])
+        log_audit_event(
+            request=request,
+            action="KNOWLEDGE_ARTICLE_PUBLISHED",
+            entity_type="KnowledgeArticle",
+            entity_id=article.id,
+            description="Knowledge base article published."
+        )
 
         return Response(
             {
@@ -1020,6 +1122,13 @@ class FAQPublishView(generics.GenericAPIView):
         faq.status = FAQ.Status.PUBLISHED
         faq.published_at = timezone.now()
         faq.save(update_fields=["status", "published_at", "updated_at"])
+        log_audit_event(
+            request=request,
+            action="FAQ_PUBLISHED",
+            entity_type="FAQ",
+            entity_id=faq.id,
+            description="FAQ published successfully."
+        )
 
         return Response(
             {
@@ -1028,3 +1137,14 @@ class FAQPublishView(generics.GenericAPIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class AuditLogListView(generics.ListAPIView):
+
+    serializer_class = AuditLogSerializer
+    permission_classes = [IsApplicationAdmin]
+
+    def get_queryset(self):
+        return AuditLog.objects.select_related(
+            "actor"
+        ).all().order_by("-created_at")

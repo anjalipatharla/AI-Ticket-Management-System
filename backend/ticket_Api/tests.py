@@ -11,6 +11,7 @@ from ticket_Api.ai_services.reply_generator import generate_reply
 from accounts.models import UserProfile
 from .sla_monitor import process_sla_monitoring
 from .models import (
+    AuditLog,
     Complaint,
     Ticket,
     TicketHistory,
@@ -2190,7 +2191,7 @@ class ComplaintAndTicketAPITests(APITestCase):
             self.assertIn("Published FAQ question?", questions)
             self.assertIn("Draft FAQ question?", questions)
             self.assertEqual(len(questions), 2)
-        # 58. Customer cannot access a Draft FAQ
+    # 58. Customer cannot access a Draft FAQ
 
     def test_customer_cannot_access_draft_faq(self):
 
@@ -2227,7 +2228,7 @@ class ComplaintAndTicketAPITests(APITestCase):
             response.status_code,
             status.HTTP_404_NOT_FOUND
         )
-        # 59. Agent and Admin can edit FAQs
+    # 59. Agent and Admin can edit FAQs
 
     def test_agent_and_admin_can_edit_faq(self):
 
@@ -2997,20 +2998,14 @@ class ComplaintAndTicketAPITests(APITestCase):
         "ticket_Api.views.generate_reply",
         side_effect=Exception("Gemini API unavailable")
     )
-    def test_ai_reply_returns_service_unavailable_when_gemini_fails(
-        self,
-        mock_generate_reply
-    ):
+    def test_ai_reply_returns_service_unavailable_when_gemini_fails(self, mock_generate_reply):
 
         customer = self.create_user(
             "ai_error_customer",
             UserProfile.Role.CUSTOMER
         )
 
-        agent = self.create_user(
-            "ai_error_agent",
-            UserProfile.Role.AGENT
-        )
+        agent = self.create_user("ai_error_agent", UserProfile.Role.AGENT)
 
         ticket = self.create_ticket(customer, agent)
 
@@ -3077,4 +3072,70 @@ class ComplaintAndTicketAPITests(APITestCase):
         self.assertEqual(
             prompt.count("Customer message"),
             30
+        )
+
+    def test_customer_complaint_creates_audit_log(self):
+
+        customer = self.create_user(
+            "audit_customer", UserProfile.Role.CUSTOMER
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.post(
+            "/api/complaints/",
+            {
+                "subject": "Audit test complaint",
+                "description": "Testing audit log creation.",
+                "category": "BILLING"
+            },
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        audit_log = AuditLog.objects.get(
+            action="COMPLAINT_CREATED"
+        )
+
+        self.assertEqual(audit_log.actor, customer)
+        self.assertEqual(audit_log.entity_type, "Complaint")
+        self.assertEqual(
+            audit_log.entity_id,
+            str(response.data["complaint"]["id"])
+        )
+        self.assertEqual(audit_log.ip_address, "127.0.0.1")
+
+    def test_customer_cannot_view_audit_logs(self):
+
+        customer = self.create_user(
+            "audit_view_customer",
+            UserProfile.Role.CUSTOMER
+        )
+
+        self.client.force_authenticate(user=customer)
+
+        response = self.client.get("/api/admin/audit-logs/")
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+    def test_admin_can_view_audit_logs(self):
+        admin = self.create_user(
+            "audit_admin",
+            UserProfile.Role.ADMIN
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get("/api/admin/audit-logs/")
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
         )

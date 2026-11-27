@@ -21,6 +21,7 @@ from .views import (
     FAQPublishView,
     TicketMessageListCreateView,
     AIReplyGenerationView,
+    AuditLogListView,
 )
 
 urlpatterns = [
@@ -84,4 +85,10 @@ urlpatterns = [
          name="faq-publish"),
     path("tickets/<int:ticket_id>/ai-reply/",
          AIReplyGenerationView.as_view(), name="ticket-ai-reply"),
+    # Admin Audit Log API
+    path(
+        "admin/audit-logs/",
+        AuditLogListView.as_view(),
+        name="audit-log-list"
+    ),
 ]
